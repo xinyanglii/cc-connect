@@ -128,7 +128,8 @@ func buildAskqMultiCardJSON(q core.UserQuestion, qIdx, total int) string {
 			},
 		})
 	}
-	// Action row: submit + cancel
+	// Action row: submit + cancel. Uses form_action_type=submit so the
+	// form's FormValue is included in the callback event.
 	formElems = append(formElems, map[string]any{
 		"tag": "column_set",
 		"columns": []map[string]any{
@@ -138,12 +139,12 @@ func buildAskqMultiCardJSON(q core.UserQuestion, qIdx, total int) string {
 				"vertical_align": "center",
 				"elements": []map[string]any{
 					{
-						"tag":           "button",
-						"text":          plainText("确定"),
-						"type":          "primary",
-						"name":          askqMultiSubmitName,
-						"action_type":   "form_submit",
-						"behaviors":     []map[string]any{{"type": "callback", "value": map[string]any{"askq_qidx": qIdx}}},
+						"tag":              "button",
+						"text":             plainText("确定"),
+						"type":             "primary",
+						"name":             askqMultiSubmitName,
+						"form_action_type": "submit",
+						"value":            map[string]any{"askq_qidx": qIdx},
 					},
 				},
 			},
@@ -153,11 +154,11 @@ func buildAskqMultiCardJSON(q core.UserQuestion, qIdx, total int) string {
 				"vertical_align": "center",
 				"elements": []map[string]any{
 					{
-						"tag":         "button",
-						"text":        plainText("取消"),
-						"type":        "default",
-						"name":        askqMultiCancelName,
-						"action_type": "form_reset",
+						"tag":              "button",
+						"text":             plainText("取消"),
+						"type":             "default",
+						"name":             askqMultiCancelName,
+						"form_action_type": "reset",
 					},
 				},
 			},
