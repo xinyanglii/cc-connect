@@ -455,11 +455,21 @@ func main() {
 			if proj.AutoCompress.MinGapMins != nil {
 				minGap = time.Duration(*proj.AutoCompress.MinGapMins) * time.Minute
 			}
+			// New default: 0 absolute tokens → engine uses threshold_pct path
+			// against the real model context window. The old 12k fallback was
+			// harmful for modern models — Opus 4.6 with 1M context would fire
+			// /compact at 1.2% fill. If max_tokens is explicitly set in config,
+			// honor it (with deprecation log).
 			maxTokens := derefInt(proj.AutoCompress.MaxTokens)
-			if maxTokens <= 0 {
-				maxTokens = 12000
+			thresholdPct := 0.0
+			if proj.AutoCompress.ThresholdPct != nil {
+				thresholdPct = *proj.AutoCompress.ThresholdPct
 			}
-			engine.SetAutoCompressConfig(true, maxTokens, minGap)
+			if maxTokens > 0 {
+				slog.Warn("auto_compress.max_tokens is deprecated; prefer auto_compress.threshold_pct for model-aware threshold",
+					"project", proj.Name, "max_tokens", maxTokens)
+			}
+			engine.SetAutoCompressConfig(true, maxTokens, thresholdPct, minGap)
 		}
 		if proj.ResetOnIdleMins != nil {
 			engine.SetResetOnIdle(time.Duration(*proj.ResetOnIdleMins) * time.Minute)
@@ -1308,12 +1318,13 @@ func reloadConfig(configPath, projName string, engine *core.Engine) (*core.Confi
 			minGap = time.Duration(*proj.AutoCompress.MinGapMins) * time.Minute
 		}
 		maxTokens := derefInt(proj.AutoCompress.MaxTokens)
-		if maxTokens <= 0 {
-			maxTokens = 12000
+		thresholdPct := 0.0
+		if proj.AutoCompress.ThresholdPct != nil {
+			thresholdPct = *proj.AutoCompress.ThresholdPct
 		}
-		engine.SetAutoCompressConfig(true, maxTokens, minGap)
+		engine.SetAutoCompressConfig(true, maxTokens, thresholdPct, minGap)
 	} else {
-		engine.SetAutoCompressConfig(false, 0, 0)
+		engine.SetAutoCompressConfig(false, 0, 0, 0)
 	}
 	if proj.ResetOnIdleMins != nil {
 		engine.SetResetOnIdle(time.Duration(*proj.ResetOnIdleMins) * time.Minute)

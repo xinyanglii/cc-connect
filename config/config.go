@@ -258,10 +258,19 @@ type HeartbeatConfig struct {
 }
 
 // AutoCompressConfig controls automatic context compression for a project.
+//
+// Resolution order for the effective threshold:
+//  1. If MaxTokens > 0 (explicit): use it absolutely. Logs a deprecation
+//     warning suggesting migration to ThresholdPct.
+//  2. Else: threshold = effective_context_window * ThresholdPct (default 0.80)
+//     where effective_context_window comes from ContextUsageReporter at
+//     runtime, falling back to ModelOption.ContextWindow (static config),
+//     then built-in per-model defaults, then a conservative 200_000.
 type AutoCompressConfig struct {
-	Enabled    *bool `toml:"enabled,omitempty"`      // default false
-	MaxTokens  *int  `toml:"max_tokens,omitempty"`   // estimated token threshold to trigger /compress
-	MinGapMins *int  `toml:"min_gap_mins,omitempty"` // minimum minutes between auto-compress runs (default 30)
+	Enabled      *bool    `toml:"enabled,omitempty"`       // default false
+	MaxTokens    *int     `toml:"max_tokens,omitempty"`    // DEPRECATED: absolute threshold. Prefer ThresholdPct.
+	ThresholdPct *float64 `toml:"threshold_pct,omitempty"` // 0.0-1.0; default 0.80. Fraction of effective context window.
+	MinGapMins   *int     `toml:"min_gap_mins,omitempty"`  // minimum minutes between auto-compress runs (default 30)
 }
 
 // ObserveConfig controls forwarding of native terminal Claude Code sessions to a messaging platform.

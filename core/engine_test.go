@@ -6749,7 +6749,7 @@ func TestAutoCompress_TriggerAfterResult(t *testing.T) {
 	sess := newQueuingSession("auto-compress")
 	agent := &stubCompressorAgent{cmd: "/compact"}
 	e := NewEngine("test", agent, []Platform{p}, "", LangEnglish)
-	e.SetAutoCompressConfig(true, 4, 0) // tiny threshold
+	e.SetAutoCompressConfig(true, 4, 0, 0) // tiny absolute threshold
 
 	key := "test:user1"
 	state := &interactiveState{
@@ -9698,4 +9698,81 @@ type stubPlatformWithObserve struct {
 
 func (s *stubPlatformWithObserve) SendObservation(_ context.Context, _, _ string) error {
 	return nil
+}
+
+// ── Per-model context & threshold resolution ─────────────────────────
+
+// stubContextReporter is a minimal agentSession impl used by
+// TestResolveAutoCompressThreshold to exercise the ContextUsageReporter path.
+type stubContextReporter struct {
+	AgentSession
+	window int
+	input  int
+}
+
+func (s *stubContextReporter) GetContextUsage() *ContextUsage {
+	return &ContextUsage{InputTokens: s.input, ContextWindow: s.window}
+}
+
+func TestResolveAutoCompressThreshold_AbsoluteOverride(t *testing.T) {
+	e := &Engine{}
+	e.SetAutoCompressConfig(true, 50_000, 0.80, 0)
+	state := &interactiveState{agentSession: &stubContextReporter{window: 1_000_000, input: 40_000}}
+	threshold, estimate := e.resolveAutoCompressThresholdAndEstimate(state, 999) // heuristic ignored
+	if threshold != 50_000 {
+		t.Errorf("threshold = %d, want 50_000 (absolute override wins)", threshold)
+	}
+	if estimate != 40_000 {
+		t.Errorf("estimate = %d, want 40_000 (from reporter)", estimate)
+	}
+}
+
+func TestResolveAutoCompressThreshold_PercentageOfWindow(t *testing.T) {
+	e := &Engine{}
+	e.SetAutoCompressConfig(true, 0, 0.80, 0) // percentage path
+	state := &interactiveState{agentSession: &stubContextReporter{window: 1_000_000, input: 500_000}}
+	threshold, estimate := e.resolveAutoCompressThresholdAndEstimate(state, 999)
+	if threshold != 800_000 {
+		t.Errorf("threshold = %d, want 800_000 (80%% of 1M)", threshold)
+	}
+	if estimate != 500_000 {
+		t.Errorf("estimate = %d, want 500_000", estimate)
+	}
+}
+
+func TestResolveAutoCompressThreshold_ConservativeFallback(t *testing.T) {
+	// No reporter → use 200k fallback × pct
+	e := &Engine{}
+	e.SetAutoCompressConfig(true, 0, 0.80, 0)
+	state := &interactiveState{} // no agentSession
+	threshold, estimate := e.resolveAutoCompressThresholdAndEstimate(state, 777)
+	if threshold != 160_000 {
+		t.Errorf("threshold = %d, want 160_000 (80%% of 200k fallback)", threshold)
+	}
+	if estimate != 777 {
+		t.Errorf("estimate = %d, want 777 (heuristic fallback)", estimate)
+	}
+}
+
+func TestResolveAutoCompressThreshold_InvalidPctFallsBack(t *testing.T) {
+	// pct = 0 → default 0.80
+	e := &Engine{}
+	e.SetAutoCompressConfig(true, 0, 0, 0) // 0 passes through SetAutoCompressConfig's clamp to 0.80
+	state := &interactiveState{agentSession: &stubContextReporter{window: 100_000, input: 0}}
+	threshold, _ := e.resolveAutoCompressThresholdAndEstimate(state, 0)
+	if threshold != 80_000 {
+		t.Errorf("threshold = %d, want 80_000 (80%% of 100k)", threshold)
+	}
+}
+
+func TestContextIndicator_WithWindow(t *testing.T) {
+	// Zero window → fallback default
+	if got := contextIndicator(100_000, 0); got == "" {
+		t.Error("expected indicator with 0 window fallback")
+	}
+	// Real window — percentage reflects it
+	got := contextIndicator(500_000, 1_000_000)
+	if got != "\n[ctx: ~50%]" {
+		t.Errorf("contextIndicator = %q, want ~50%%", got)
+	}
 }

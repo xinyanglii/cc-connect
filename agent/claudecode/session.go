@@ -49,6 +49,15 @@ type claudeSession struct {
 	// Stop hook timeout. The wait ends as soon as the process exits,
 	// so typical shutdowns take seconds, not the full timeout.
 	gracefulStopTimeout time.Duration
+
+	// contextWindow is the STATIC declared window for the chosen model
+	// (from config or built-in default). Immutable after construction.
+	contextWindow int
+	// lastInputTokens is the last-observed input_tokens from a result event.
+	// Updated in handleResult; read by GetContextUsage to report runtime load.
+	// Represents the INPUT to the most recently completed turn — a post-hoc
+	// detector for the NEXT turn's auto-compact decision.
+	lastInputTokens atomic.Int64
 }
 
 func newClaudeSession(ctx context.Context, workDir, cliBin string, cliExtraArgs []string, cliArgsFlag string, model, effort, sessionID, mode string, allowedTools, disallowedTools []string, extraEnv []string, platformPrompt string, disableVerbose bool, spawnOpts core.SpawnOptions, maxContextTokens int) (*claudeSession, error) {
@@ -419,6 +428,10 @@ func (cs *claudeSession) handleResult(raw map[string]any) {
 			outputTokens = int(v)
 		}
 	}
+	// Stash for GetContextUsage reads between turns.
+	if inputTokens > 0 {
+		cs.lastInputTokens.Store(int64(inputTokens))
+	}
 
 	evt := core.Event{
 		Type:         core.EventResult,
@@ -663,6 +676,25 @@ func (cs *claudeSession) SetLiveMode(mode string) bool {
 
 func (cs *claudeSession) Events() <-chan core.Event {
 	return cs.events
+}
+
+// GetContextUsage implements core.ContextUsageReporter. Returns a snapshot
+// of the session's last-observed input token count vs its configured context
+// window. Used by the engine's auto-compact trigger to compute an accurate
+// fill percentage instead of relying on rune-count heuristics.
+//
+// Returns nil if both input tokens and window are unknown — callers fall
+// back to their own heuristic.
+func (cs *claudeSession) GetContextUsage() *core.ContextUsage {
+	inputTokens := int(cs.lastInputTokens.Load())
+	if inputTokens == 0 && cs.contextWindow == 0 {
+		return nil
+	}
+	return &core.ContextUsage{
+		UsedTokens:    inputTokens,
+		InputTokens:   inputTokens,
+		ContextWindow: cs.contextWindow,
+	}
 }
 
 func (cs *claudeSession) CurrentSessionID() string {
