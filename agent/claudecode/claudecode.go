@@ -49,6 +49,7 @@ type Agent struct {
 	sessionEnv       []string
 	routerURL        string // Claude Code Router URL (e.g., "http://127.0.0.1:3456")
 	routerAPIKey     string // Claude Code Router API key (optional)
+	streamPartial    bool   // pass --include-partial-messages for token-level streaming; default true
 
 	providerProxy  *core.ProviderProxy // local proxy for third-party providers
 	proxyLocalURL  string              // local URL of the proxy
@@ -163,6 +164,13 @@ func New(opts map[string]any) (core.Agent, error) {
 	routerURL, _ := opts["router_url"].(string)
 	routerAPIKey, _ := opts["router_api_key"].(string)
 
+	// stream_partial: token-level streaming via --include-partial-messages.
+	// Default true; set false to disable (e.g. for debugging or noisy envs).
+	streamPartial := true
+	if v, ok := opts["stream_partial"].(bool); ok {
+		streamPartial = v
+	}
+
 	// run_as_user: optional OS-user isolation. Injected into opts from
 	// the project-level config field by cmd/cc-connect/main.go.
 	spawnOpts := core.SpawnOptions{}
@@ -200,6 +208,7 @@ func New(opts map[string]any) (core.Agent, error) {
 		activeIdx:        -1,
 		routerURL:        routerURL,
 		routerAPIKey:     routerAPIKey,
+		streamPartial:    streamPartial,
 		spawnOpts:        spawnOpts,
 	}, nil
 }
@@ -477,9 +486,10 @@ func (a *Agent) StartSessionWithOptions(ctx context.Context, sessionID string, o
 	// When router_url is set, --verbose conflicts with --output-format stream-json
 	// (verbose emits non-JSON text to stdout that corrupts the JSON stream).
 	disableVerbose := a.routerURL != ""
+	streamPartial := a.streamPartial
 	a.mu.Unlock()
 
-	cs, err := newClaudeSession(ctx, a.workDir, a.cliBin, a.cliExtraArgs, a.cliArgsFlag, model, effort, sessionID, a.mode, tools, disTools, extraEnv, platformPrompt, disableVerbose, a.spawnOpts, maxTok)
+	cs, err := newClaudeSession(ctx, a.workDir, a.cliBin, a.cliExtraArgs, a.cliArgsFlag, model, effort, sessionID, a.mode, tools, disTools, extraEnv, platformPrompt, disableVerbose, streamPartial, a.spawnOpts, maxTok)
 	if err != nil {
 		return nil, err
 	}

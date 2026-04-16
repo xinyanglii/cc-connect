@@ -53,6 +53,10 @@ type claudeSession struct {
 	// contextWindow is the STATIC declared window for the chosen model
 	// (from config or built-in default). Immutable after construction.
 	contextWindow int
+	// streamPartial tracks whether --include-partial-messages was passed.
+	// When true, text/thinking blocks in the final assistant message are
+	// skipped (already delivered via stream_event deltas).
+	streamPartial bool
 	// lastInputTokens is the last-observed input_tokens from a result event.
 	// Updated in handleResult; read by GetContextUsage to report runtime load.
 	// Represents the INPUT to the most recently completed turn — a post-hoc
@@ -60,7 +64,7 @@ type claudeSession struct {
 	lastInputTokens atomic.Int64
 }
 
-func newClaudeSession(ctx context.Context, workDir, cliBin string, cliExtraArgs []string, cliArgsFlag string, model, effort, sessionID, mode string, allowedTools, disallowedTools []string, extraEnv []string, platformPrompt string, disableVerbose bool, spawnOpts core.SpawnOptions, maxContextTokens int) (*claudeSession, error) {
+func newClaudeSession(ctx context.Context, workDir, cliBin string, cliExtraArgs []string, cliArgsFlag string, model, effort, sessionID, mode string, allowedTools, disallowedTools []string, extraEnv []string, platformPrompt string, disableVerbose, streamPartial bool, spawnOpts core.SpawnOptions, maxContextTokens int) (*claudeSession, error) {
 	sessionCtx, cancel := context.WithCancel(ctx)
 
 	// innerArgs are Claude Code CLI flags — when a wrapper is used with
@@ -76,8 +80,11 @@ func newClaudeSession(ctx context.Context, workDir, cliBin string, cliExtraArgs 
 		// --include-partial-messages enables token-level streaming via
 		// stream_event → content_block_delta → text_delta. Without it the
 		// full assistant response arrives as one "assistant" message event,
-		// defeating the stream preview. Requires --verbose.
-		innerArgs = append(innerArgs, "--include-partial-messages")
+		// defeating the stream preview. Requires --verbose. Controlled by
+		// stream_partial agent option; default true.
+		if streamPartial {
+			innerArgs = append(innerArgs, "--include-partial-messages")
+		}
 	}
 
 	if mode != "" && mode != "default" {
@@ -195,6 +202,7 @@ func newClaudeSession(ctx context.Context, workDir, cliBin string, cliExtraArgs 
 		cancel:              cancel,
 		done:                make(chan struct{}),
 		gracefulStopTimeout: 120 * time.Second,
+		streamPartial:       streamPartial && !disableVerbose,
 	}
 	cs.setPermissionMode(mode)
 	cs.sessionID.Store(sessionID)
@@ -414,12 +422,31 @@ func (cs *claudeSession) handleAssistant(raw map[string]any) {
 				return
 			}
 		case "thinking":
-			// Skip: already streamed via stream_event content_block_delta
-			// (thinking_delta) when --include-partial-messages is enabled.
-			// Emitting here would duplicate.
+			// When stream_partial is on, deltas already delivered this text.
+			// Otherwise (legacy/disabled), emit the full block now.
+			if cs.streamPartial {
+				continue
+			}
+			if thinking, ok := item["thinking"].(string); ok && thinking != "" {
+				evt := core.Event{Type: core.EventThinking, Content: thinking}
+				select {
+				case cs.events <- evt:
+				case <-cs.ctx.Done():
+					return
+				}
+			}
 		case "text":
-			// Skip: already streamed via stream_event content_block_delta
-			// (text_delta) when --include-partial-messages is enabled.
+			if cs.streamPartial {
+				continue
+			}
+			if text, ok := item["text"].(string); ok && text != "" {
+				evt := core.Event{Type: core.EventText, Content: text}
+				select {
+				case cs.events <- evt:
+				case <-cs.ctx.Done():
+					return
+				}
+			}
 		}
 	}
 }
