@@ -3611,6 +3611,17 @@ func (e *Engine) handleCommand(p Platform, msg *Message, raw string) bool {
 			e.executeSkill(p, msg, skill, args)
 			return true
 		}
+		// /btw is NOT a regular cc-connect command — it's a special prefix
+		// recognized later in the busy-path (handleMessage, via isBtwCommand)
+		// for mid-turn injection. Suppress the "unknown command" warning for it
+		// and fall through silently so the busy-path can catch it when the
+		// session is actually busy. When session is idle, the message falls
+		// through to normal agent processing (user sees /btw foo delivered
+		// to the agent verbatim; acceptable since idle /btw has no injection
+		// target anyway).
+		if cmd == "btw" {
+			return false
+		}
 		// Not a cc-connect command — notify user, then fall through to agent
 		e.send(p, msg.ReplyCtx, fmt.Sprintf(e.i18n.T(MsgUnknownCommand), "/"+cmd))
 		return false
