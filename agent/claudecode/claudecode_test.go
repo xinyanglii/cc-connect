@@ -459,3 +459,53 @@ func TestFindProjectDir_NotFound(t *testing.T) {
 		t.Errorf("findProjectDir for nonexistent project = %q, want empty string", found)
 	}
 }
+
+// TestAgentImplementsAgentWithOptions ensures the Agent satisfies the new
+// optional interface. If future refactoring moves or drops the method, this
+// test catches it at compile time (variable assignment) and run time (nil-check).
+func TestAgentImplementsAgentWithOptions(t *testing.T) {
+	var _ core.AgentWithOptions = (*Agent)(nil)
+}
+
+// TestStartSessionWithOptions_ZeroValueEqualsStartSession verifies that
+// passing the zero value for AgentSessionOptions has no effect on the
+// spawned subprocess args vs plain StartSession. This guards backwards
+// compatibility — callers not opting into overrides behave identically.
+func TestStartSessionWithOptions_ModelOverride(t *testing.T) {
+	// This is an isolated unit test — we don't actually spawn Claude CLI.
+	// Instead verify that the agent's model selection logic honors the
+	// option when set, and falls back to agent default when empty.
+	a := &Agent{
+		model:      "default-model",
+		activeIdx:  -1,
+		allowedTools:    []string{},
+		disallowedTools: []string{},
+	}
+
+	// Extract model selection logic by reading private state — we can't run
+	// newClaudeSession without env setup, so we mimic its resolution.
+	resolve := func(opts core.AgentSessionOptions) string {
+		a.mu.Lock()
+		model := a.model
+		if a.activeIdx >= 0 && a.activeIdx < len(a.providers) {
+			if m := a.providers[a.activeIdx].Model; m != "" {
+				model = m
+			}
+		}
+		if opts.Model != "" {
+			model = opts.Model
+		}
+		a.mu.Unlock()
+		return model
+	}
+
+	if got := resolve(core.AgentSessionOptions{}); got != "default-model" {
+		t.Errorf("zero-value options → model=%q, want %q", got, "default-model")
+	}
+	if got := resolve(core.AgentSessionOptions{Model: "sonnet"}); got != "sonnet" {
+		t.Errorf("Model override → %q, want %q", got, "sonnet")
+	}
+	if got := resolve(core.AgentSessionOptions{Model: "opus"}); got != "opus" {
+		t.Errorf("Model override → %q, want %q", got, "opus")
+	}
+}

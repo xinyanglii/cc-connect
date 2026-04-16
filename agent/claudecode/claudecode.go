@@ -378,8 +378,19 @@ func (a *Agent) SetPlatformPrompt(prompt string) {
 	a.platformPrompt = prompt
 }
 
-// StartSession creates a persistent interactive Claude Code session.
+// StartSession creates a persistent interactive Claude Code session with
+// the agent's default configuration.
 func (a *Agent) StartSession(ctx context.Context, sessionID string) (core.AgentSession, error) {
+	return a.StartSessionWithOptions(ctx, sessionID, core.AgentSessionOptions{})
+}
+
+// StartSessionWithOptions creates a session and applies per-session overrides
+// from opts. Fields left as zero values inherit the agent default. Currently
+// supported overrides: Model. When opts is the zero value this is identical
+// to StartSession.
+//
+// Implements core.AgentWithOptions.
+func (a *Agent) StartSessionWithOptions(ctx context.Context, sessionID string, opts core.AgentSessionOptions) (core.AgentSession, error) {
 	a.mu.Lock()
 	tools := make([]string, len(a.allowedTools))
 	copy(tools, a.allowedTools)
@@ -394,6 +405,11 @@ func (a *Agent) StartSession(ctx context.Context, sessionID string) (core.AgentS
 		if m := a.providers[a.activeIdx].Model; m != "" {
 			model = m
 		}
+	}
+	// Explicit per-session override wins over agent default and provider
+	// routing — this is the whole point of the option.
+	if opts.Model != "" {
+		model = opts.Model
 	}
 	platformPrompt := a.platformPrompt
 	// When router_url is set, --verbose conflicts with --output-format stream-json
