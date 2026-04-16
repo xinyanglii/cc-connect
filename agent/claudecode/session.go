@@ -73,6 +73,11 @@ func newClaudeSession(ctx context.Context, workDir, cliBin string, cliExtraArgs 
 	}
 	if !disableVerbose {
 		innerArgs = append(innerArgs, "--verbose")
+		// --include-partial-messages enables token-level streaming via
+		// stream_event → content_block_delta → text_delta. Without it the
+		// full assistant response arrives as one "assistant" message event,
+		// defeating the stream preview. Requires --verbose.
+		innerArgs = append(innerArgs, "--include-partial-messages")
 	}
 
 	if mode != "" && mode != "default" {
@@ -309,6 +314,8 @@ func (cs *claudeSession) handleReadLoopLine(line string) {
 	switch eventType {
 	case "system":
 		cs.handleSystem(raw)
+	case "stream_event":
+		cs.handleStreamEvent(raw)
 	case "assistant":
 		cs.handleAssistant(raw)
 	case "user":
@@ -320,6 +327,49 @@ func (cs *claudeSession) handleReadLoopLine(line string) {
 	case "control_cancel_request":
 		requestID, _ := raw["request_id"].(string)
 		slog.Debug("claudeSession: permission cancelled", "request_id", requestID)
+	}
+}
+
+// handleStreamEvent processes partial message deltas emitted by Claude CLI
+// when --include-partial-messages is set. Streams text_delta chunks as
+// EventText so the IM stream preview can update incrementally. The final
+// aggregated "assistant" event still arrives afterward; handleAssistant
+// skips its text content blocks to avoid duplicate delivery.
+func (cs *claudeSession) handleStreamEvent(raw map[string]any) {
+	inner, ok := raw["event"].(map[string]any)
+	if !ok {
+		return
+	}
+	innerType, _ := inner["type"].(string)
+	if innerType != "content_block_delta" {
+		return
+	}
+	delta, ok := inner["delta"].(map[string]any)
+	if !ok {
+		return
+	}
+	deltaType, _ := delta["type"].(string)
+	switch deltaType {
+	case "text_delta":
+		text, _ := delta["text"].(string)
+		if text == "" {
+			return
+		}
+		evt := core.Event{Type: core.EventText, Content: text}
+		select {
+		case cs.events <- evt:
+		case <-cs.ctx.Done():
+		}
+	case "thinking_delta":
+		thinking, _ := delta["thinking"].(string)
+		if thinking == "" {
+			return
+		}
+		evt := core.Event{Type: core.EventThinking, Content: thinking}
+		select {
+		case cs.events <- evt:
+		case <-cs.ctx.Done():
+		}
 	}
 }
 
@@ -364,23 +414,12 @@ func (cs *claudeSession) handleAssistant(raw map[string]any) {
 				return
 			}
 		case "thinking":
-			if thinking, ok := item["thinking"].(string); ok && thinking != "" {
-				evt := core.Event{Type: core.EventThinking, Content: thinking}
-				select {
-				case cs.events <- evt:
-				case <-cs.ctx.Done():
-					return
-				}
-			}
+			// Skip: already streamed via stream_event content_block_delta
+			// (thinking_delta) when --include-partial-messages is enabled.
+			// Emitting here would duplicate.
 		case "text":
-			if text, ok := item["text"].(string); ok && text != "" {
-				evt := core.Event{Type: core.EventText, Content: text}
-				select {
-				case cs.events <- evt:
-				case <-cs.ctx.Done():
-					return
-				}
-			}
+			// Skip: already streamed via stream_event content_block_delta
+			// (text_delta) when --include-partial-messages is enabled.
 		}
 	}
 }
