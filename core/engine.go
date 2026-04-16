@@ -19,17 +19,11 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 	"unicode/utf8"
 )
 
 const maxPlatformMessageLen = 4000
-
-// maxOutstandingInjections caps how many mid-turn messages can be in flight
-// to the agent subprocess at once. Prevents runaway cost from rapid-fire
-// spam. Not user-configurable in v1 — raise if users hit this regularly.
-const maxOutstandingInjections int32 = 10
 const telegramBotCommandLimit = 100
 const maxQueuedMessages = 5 // cap queued messages to bound memory usage
 
@@ -285,7 +279,7 @@ type interactiveState struct {
 	stopCh                 chan struct{}
 	stopped                bool
 	pending                *pendingPermission
-	pendingMessages        []queuedMessage // pre-spawn queue: messages that arrived before the agent subprocess was ready
+	pendingMessages        []queuedMessage // messages queued while session was busy
 	approveAll             bool            // when true, auto-approve all permission requests for this session
 	fromVoice              bool            // true if current turn originated from voice transcription
 	sideText               string
@@ -293,14 +287,6 @@ type interactiveState struct {
 	modelSwitch            *modelSwitchState
 	lastAutoCompressAt     time.Time
 	lastAutoCompressTokens int
-
-	// outstandingMessages tracks user messages already written to the agent
-	// subprocess stdin that have not yet produced their EventResult. Each
-	// Send() increments; each EventResult decrements. processInteractiveEvents
-	// continues the loop while this is > 0 so that multi-turn batches (user
-	// sent a message mid-response) complete on the same mutex hold.
-	// Per-interactiveState; reset on cleanupInteractiveState.
-	outstandingMessages atomic.Int32
 }
 
 type deleteModeState struct {
@@ -1648,76 +1634,38 @@ func (e *Engine) handleMessage(p Platform, msg *Message) {
 	session := sessions.GetOrCreateActive(msg.SessionKey)
 	sessions.UpdateUserMeta(msg.SessionKey, msg.UserName, msg.ChatName)
 	if !session.TryLock() {
-		// Session is busy — inject the new message directly into the running
-		// agent subprocess (mid-turn injection). Claude CLI 2.1.104+ handles
-		// multiple in-flight user messages natively: each produces its own
-		// EventResult in order. The event loop tracks outstanding count.
-		//
-		// /btw <text> is kept as a backwards-compatible alias that simply
-		// strips the prefix. The result is identical to sending <text>
-		// directly.
-		injectContent := content
+		// Check for /btw — inject into the running session mid-turn
 		trimmed := strings.TrimSpace(content)
 		if isBtwCommand(trimmed) {
-			injectContent = strings.TrimSpace(trimmed[len(matchBtwPrefix(trimmed)):])
-		}
-		if injectContent == "" {
-			return
-		}
-		e.interactiveMu.Lock()
-		state, ok := e.interactiveStates[interactiveKey]
-		e.interactiveMu.Unlock()
-
-		// No active interactiveState yet (pre-spawn) — fall back to queue so
-		// the subprocess, once ready, picks up this message in order.
-		if !ok || state == nil || state.agentSession == nil || !state.agentSession.Alive() {
-			if e.queueMessageForBusySession(p, msg, interactiveKey) {
-				// Race guard: drain loop may have just finished.
-				if session.TryLock() {
-					go e.drainOrphanedQueue(session, sessions, interactiveKey, agent, resolvedWorkspace)
+			btw := strings.TrimSpace(trimmed[len(matchBtwPrefix(trimmed)):])
+			if btw != "" {
+				e.interactiveMu.Lock()
+				state, ok := e.interactiveStates[interactiveKey]
+				e.interactiveMu.Unlock()
+				if ok && state.agentSession != nil && state.agentSession.Alive() {
+					if err := state.agentSession.Send(btw, nil, nil); err != nil {
+						slog.Error("btw: send failed", "error", err)
+						e.reply(p, msg.ReplyCtx, e.i18n.T(MsgBtwSendFailed))
+					} else {
+						e.reply(p, msg.ReplyCtx, e.i18n.T(MsgBtwSent))
+					}
+					return
 				}
-				return
 			}
-			e.reply(p, msg.ReplyCtx, e.i18n.T(MsgPreviousProcessing))
+		}
+		// Session is busy — try to queue the message for the running turn
+		// so the agent processes it immediately after the current turn ends.
+		if e.queueMessageForBusySession(p, msg, interactiveKey) {
+			// Race guard: the drain loop in processInteractiveMessageWith may
+			// have just finished (session unlocked) between our TryLock failure
+			// and the queue append. Re-try TryLock — if it succeeds, no one is
+			// draining the queue so we must start a processor ourselves.
+			if session.TryLock() {
+				go e.drainOrphanedQueue(session, sessions, interactiveKey, agent, resolvedWorkspace)
+			}
 			return
 		}
-
-		// Rate limit: refuse if too many outstanding mid-turn injections.
-		if state.outstandingMessages.Load() >= maxOutstandingInjections {
-			slog.Info("mid-turn injection rate-limited",
-				"session", msg.SessionKey, "outstanding", state.outstandingMessages.Load())
-			e.reply(p, msg.ReplyCtx, e.i18n.T(MsgTooManyOutstanding))
-			return
-		}
-
-		// Auto-deny any pending permission so the new user message takes
-		// priority. Matches native Claude Code TUI behavior.
-		state.mu.Lock()
-		if state.pending != nil {
-			pendingReq := state.pending
-			state.pending = nil
-			state.mu.Unlock()
-			_ = state.agentSession.RespondPermission(pendingReq.RequestID, PermissionResult{
-				Behavior: "deny",
-				Message:  "Superseded by new user message",
-			})
-			close(pendingReq.Resolved)
-			slog.Info("auto-denied pending permission for new mid-turn message",
-				"request_id", pendingReq.RequestID)
-		} else {
-			state.mu.Unlock()
-		}
-
-		// Inject and track.
-		if err := state.agentSession.Send(injectContent, msg.Images, msg.Files); err != nil {
-			slog.Error("mid-turn inject failed", "error", err)
-			e.reply(p, msg.ReplyCtx, e.i18n.T(MsgBtwSendFailed))
-			return
-		}
-		state.outstandingMessages.Add(1)
-		slog.Info("mid-turn injected",
-			"session", msg.SessionKey,
-			"outstanding", state.outstandingMessages.Load())
+		e.reply(p, msg.ReplyCtx, e.i18n.T(MsgPreviousProcessing))
 		return
 	}
 
@@ -2242,7 +2190,6 @@ func (e *Engine) processInteractiveMessageWith(p Platform, msg *Message, session
 	// Send until the prompt turn finishes (e.g. ACP session/prompt); they may emit
 	// EventPermissionRequest while blocked — the event loop must run in parallel.
 	sendDone := make(chan error, 1)
-	state.outstandingMessages.Add(1) // matched by this turn's EventResult
 	go func() {
 		sendDone <- state.agentSession.Send(promptContent, msg.Images, msg.Files)
 	}()
@@ -3167,32 +3114,6 @@ func (e *Engine) processInteractiveEvents(state *interactiveState, session *Sess
 				}
 			}
 
-			// This EventResult completes one outstanding message.
-			// Decrement the counter. If > 0 remains (mid-turn injections
-			// still in flight), continue the loop — their EventResults are
-			// coming. Don't release the mutex yet.
-			remaining := state.outstandingMessages.Add(-1)
-			if remaining < 0 {
-				// Invariant violation: more results than sends. Reset to
-				// 0 and log — continuing is safer than panicking.
-				slog.Warn("outstandingMessages went negative; resetting", "observed", remaining)
-				state.outstandingMessages.Store(0)
-				remaining = 0
-			}
-			if remaining > 0 {
-				slog.Debug("mid-turn injection in-flight; looping for next EventResult",
-					"remaining", remaining)
-				// Stop typing for this just-finished turn so indicator reflects
-				// the agent still working on the next one.
-				if stopTyping != nil {
-					stopTyping()
-					stopTyping = nil
-				}
-				// Keep event loop running — next iteration consumes the
-				// injected message's EventResult.
-				continue
-			}
-
 			// Check for queued messages — if present, continue the event loop
 			// for the next turn instead of returning.
 			state.mu.Lock()
@@ -3231,7 +3152,6 @@ func (e *Engine) processInteractiveEvents(state *interactiveState, session *Sess
 				queuedPrompt := e.buildSenderPrompt(queued.content, queued.userID, queued.userName, queued.msgPlatform, queued.msgSessionKey)
 
 				nextSend := make(chan error, 1)
-				state.outstandingMessages.Add(1)
 				go func() {
 					nextSend <- state.agentSession.Send(queuedPrompt, queued.images, queued.files)
 				}()
@@ -3395,7 +3315,6 @@ func (e *Engine) drainPendingMessages(state *interactiveState, session *Session,
 		session.AddHistory("user", queued.content)
 
 		sendDone := make(chan error, 1)
-		state.outstandingMessages.Add(1)
 		go func() {
 			sendDone <- state.agentSession.Send(prompt, queued.images, queued.files)
 		}()

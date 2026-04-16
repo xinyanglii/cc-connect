@@ -9776,29 +9776,3 @@ func TestContextIndicator_WithWindow(t *testing.T) {
 		t.Errorf("contextIndicator = %q, want ~50%%", got)
 	}
 }
-
-// ── Mid-turn injection / outstanding counter ─────────────────────────
-
-func TestOutstandingMessages_Increments(t *testing.T) {
-	// Zero-init is 0; Add increments; Add(-1) decrements.
-	state := &interactiveState{}
-	if v := state.outstandingMessages.Load(); v != 0 {
-		t.Errorf("zero-init outstanding = %d, want 0", v)
-	}
-	state.outstandingMessages.Add(1)
-	state.outstandingMessages.Add(1)
-	if v := state.outstandingMessages.Load(); v != 2 {
-		t.Errorf("after two Add(1): %d, want 2", v)
-	}
-	state.outstandingMessages.Add(-1)
-	if v := state.outstandingMessages.Load(); v != 1 {
-		t.Errorf("after -1: %d, want 1", v)
-	}
-}
-
-func TestMaxOutstandingInjections_Constant(t *testing.T) {
-	// Guard that the constant hasn't accidentally drifted.
-	if maxOutstandingInjections != 10 {
-		t.Errorf("maxOutstandingInjections = %d, want 10", maxOutstandingInjections)
-	}
-}
