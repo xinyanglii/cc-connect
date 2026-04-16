@@ -57,6 +57,12 @@ type claudeSession struct {
 	// When true, text/thinking blocks in the final assistant message are
 	// skipped (already delivered via stream_event deltas).
 	streamPartial bool
+	// sawTextDelta is set when at least one text_delta was observed via
+	// stream_event on the current session. Used as a fallback signal:
+	// if streamPartial is on but no deltas ever arrived (e.g. upstream
+	// wire format changed), handleAssistant emits the final text directly
+	// instead of silently dropping the reply.
+	sawTextDelta atomic.Bool
 	// lastInputTokens is the last-observed input_tokens from a result event.
 	// Updated in handleResult; read by GetContextUsage to report runtime load.
 	// Represents the INPUT to the most recently completed turn — a post-hoc
@@ -343,17 +349,38 @@ func (cs *claudeSession) handleReadLoopLine(line string) {
 // EventText so the IM stream preview can update incrementally. The final
 // aggregated "assistant" event still arrives afterward; handleAssistant
 // skips its text content blocks to avoid duplicate delivery.
+//
+// Expected wire format (as of Claude CLI 2.1.x):
+//
+//	{"type":"stream_event","event":{"type":"content_block_delta","index":N,
+//	  "delta":{"type":"text_delta","text":"..."}}}
+//
+// Other event sub-types (message_start, content_block_start/stop,
+// message_delta, message_stop) carry no text payload and are ignored.
+// If Anthropic renames fields, this handler degrades silently — text
+// falls back to the final "assistant" event via handleAssistant when
+// streamPartial auto-disables (see detection below). We log at WARN
+// so operators can notice broken streaming.
 func (cs *claudeSession) handleStreamEvent(raw map[string]any) {
 	inner, ok := raw["event"].(map[string]any)
 	if !ok {
+		slog.Warn("claudeSession: stream_event missing inner 'event' object — partial-message format may have changed")
 		return
 	}
 	innerType, _ := inner["type"].(string)
-	if innerType != "content_block_delta" {
+	switch innerType {
+	case "content_block_delta":
+		// handled below
+	case "message_start", "content_block_start", "content_block_stop",
+		"message_delta", "message_stop":
+		return // no payload to forward
+	default:
+		slog.Debug("claudeSession: unhandled stream_event sub-type", "type", innerType)
 		return
 	}
 	delta, ok := inner["delta"].(map[string]any)
 	if !ok {
+		slog.Warn("claudeSession: content_block_delta missing 'delta' object")
 		return
 	}
 	deltaType, _ := delta["type"].(string)
@@ -363,6 +390,7 @@ func (cs *claudeSession) handleStreamEvent(raw map[string]any) {
 		if text == "" {
 			return
 		}
+		cs.sawTextDelta.Store(true)
 		evt := core.Event{Type: core.EventText, Content: text}
 		select {
 		case cs.events <- evt:
@@ -378,6 +406,13 @@ func (cs *claudeSession) handleStreamEvent(raw map[string]any) {
 		case cs.events <- evt:
 		case <-cs.ctx.Done():
 		}
+	case "input_json_delta", "signature_delta":
+		// Tool-input and thinking-signature deltas — currently unused by
+		// the UI layer. Tool input is re-emitted fully in the final
+		// assistant message's tool_use block.
+		return
+	default:
+		slog.Debug("claudeSession: unhandled delta type", "type", deltaType)
 	}
 }
 
@@ -422,9 +457,12 @@ func (cs *claudeSession) handleAssistant(raw map[string]any) {
 				return
 			}
 		case "thinking":
-			// When stream_partial is on, deltas already delivered this text.
-			// Otherwise (legacy/disabled), emit the full block now.
-			if cs.streamPartial {
+			// When stream_partial is on AND deltas actually arrived, skip
+			// (already delivered via stream_event). If sawTextDelta is
+			// false after streaming was advertised, the wire format likely
+			// changed — fall back to emitting the full block so the user
+			// still sees the reply.
+			if cs.streamPartial && cs.sawTextDelta.Load() {
 				continue
 			}
 			if thinking, ok := item["thinking"].(string); ok && thinking != "" {
@@ -436,8 +474,11 @@ func (cs *claudeSession) handleAssistant(raw map[string]any) {
 				}
 			}
 		case "text":
-			if cs.streamPartial {
+			if cs.streamPartial && cs.sawTextDelta.Load() {
 				continue
+			}
+			if cs.streamPartial && !cs.sawTextDelta.Load() {
+				slog.Warn("claudeSession: stream_partial enabled but no text_delta observed — falling back to full text; Claude CLI stream-event format may have changed")
 			}
 			if text, ok := item["text"].(string); ok && text != "" {
 				evt := core.Event{Type: core.EventText, Content: text}
