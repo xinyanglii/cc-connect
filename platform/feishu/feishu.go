@@ -118,6 +118,7 @@ type Platform struct {
 	appSecret                  string
 	progressStyle              string
 	useInteractiveCard         bool
+	streamingCard              bool // use CardKit streaming_mode for typewriter animation; default true
 	self                       core.Platform
 	reactionEmoji              string
 	doneEmoji                  string
@@ -220,6 +221,10 @@ func newPlatform(name, domain string, opts map[string]any) (core.Platform, error
 	if v, ok := opts["enable_feishu_card"].(bool); ok {
 		useInteractiveCard = v
 	}
+	streamingCard := true
+	if v, ok := opts["streaming_card"].(bool); ok {
+		streamingCard = v
+	}
 
 	// Webhook mode configuration (for Lark international version)
 	port, _ := opts["port"].(string)
@@ -244,6 +249,7 @@ func newPlatform(name, domain string, opts map[string]any) (core.Platform, error
 		appSecret:                  appSecret,
 		progressStyle:              progressStyle,
 		useInteractiveCard:         useInteractiveCard,
+		streamingCard:              streamingCard,
 		reactionEmoji:              reactionEmoji,
 		doneEmoji:                  doneEmoji,
 		allowFrom:                  allowFrom,
@@ -3025,6 +3031,13 @@ func buildPreviewCardJSON(content string) string {
 // SendPreviewStart sends a new card message and returns a handle for subsequent edits.
 // Using card (interactive) type for both preview and final message so updates
 // are in-place without needing to delete and resend.
+//
+// Two paths:
+//   - streaming_card=true → build card with streaming_mode, create via CardKit
+//     and attach to chat referencing card_id. Subsequent UpdateMessage calls
+//     stream text via cardElement.content — Feishu client animates typewriter.
+//   - streaming_card=false → legacy path: post the card directly via Im.Message
+//     and patch it on updates (no animation).
 func (p *Platform) SendPreviewStart(ctx context.Context, rctx any, content string) (any, error) {
 	if !p.useInteractiveCard {
 		return nil, core.ErrNotSupported
@@ -3038,6 +3051,27 @@ func (p *Platform) SendPreviewStart(ctx context.Context, rctx any, content strin
 	chatID := rc.chatID
 	if chatID == "" {
 		return nil, fmt.Errorf("%s: chatID is empty", p.tag())
+	}
+
+	// Streaming-card path: CardKit typewriter animation.
+	if p.streamingCard {
+		cardID, err := p.createCardKitCard(ctx, buildStreamingCardJSON(content))
+		if err != nil {
+			slog.Warn("feishu: CardKit create failed, falling back to legacy patch path", "error", err)
+			// fall through to legacy path
+		} else {
+			msgID, err := p.sendCardKitMessage(ctx, rc, cardID)
+			if err != nil {
+				slog.Warn("feishu: CardKit send failed, falling back to legacy patch path", "error", err)
+				// fall through to legacy path
+			} else {
+				return &feishuStreamingHandle{
+					cardID:    cardID,
+					messageID: msgID,
+					chatID:    chatID,
+				}, nil
+			}
+		}
 	}
 
 	cardJSON := buildPreviewCardJSON(content)
@@ -3105,10 +3139,30 @@ func (p *Platform) SendPreviewStart(ctx context.Context, rctx any, content strin
 }
 
 // UpdateMessage edits an existing card message identified by previewHandle.
-// Uses the Patch API (HTTP PATCH) which is required for interactive card messages.
+// For CardKit streaming handles: pushes text via cardElement.content with a
+// monotonic sequence, triggering client-side typewriter animation.
+// For legacy handles: uses Im.Message.Patch to replace the card JSON.
 func (p *Platform) UpdateMessage(ctx context.Context, previewHandle any, content string) error {
 	if !p.useInteractiveCard {
 		return core.ErrNotSupported
+	}
+
+	// CardKit streaming path. Only handles plain text updates — the streaming
+	// card element is a single markdown block whose text is pushed
+	// cumulatively via cardElement.content. Progress-style structured
+	// updates (ProgressCardPayload) aren't supported on this path; they go
+	// through the separate compact-progress writer (cp) with its own card.
+	if sh, ok := previewHandle.(*feishuStreamingHandle); ok {
+		if _, ok := core.ParseProgressCardPayload(content); ok {
+			// Progress payload accidentally routed here — ignore, the cp
+			// writer will surface progress via its own (non-streaming) card.
+			return nil
+		}
+		processed := content
+		if containsMarkdown(content) {
+			processed = preprocessFeishuMarkdown(content)
+		}
+		return p.streamCardContent(ctx, sh.cardID, streamingElementID, sanitizeMarkdownURLs(processed), sh.nextSeq())
 	}
 
 	h, ok := previewHandle.(*feishuPreviewHandle)

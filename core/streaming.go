@@ -73,6 +73,14 @@ type PreviewFinishPreference interface {
 	KeepPreviewOnFinish() bool
 }
 
+// PreviewFinalizer is an optional interface for platforms that need to run
+// a cleanup step after the last UpdateMessage — e.g. Feishu's CardKit
+// streaming_mode must be flipped off so the card returns to normal
+// (interactive, forwardable) behavior.
+type PreviewFinalizer interface {
+	FinalizePreview(ctx context.Context, previewHandle any) error
+}
+
 func newStreamPreview(cfg StreamPreviewCfg, p Platform, replyCtx any, ctx context.Context, transform func(string) string) *streamPreview {
 	return &streamPreview{
 		cfg:       cfg,
@@ -353,6 +361,12 @@ func (sp *streamPreview) finish(finalText string) bool {
 			_ = cleaner.DeletePreviewMessage(sp.ctx, sp.previewMsgID)
 		}
 		return false
+	}
+	// Optional: platform-specific finalize (e.g. close CardKit streaming_mode).
+	if finalizer, ok := sp.platform.(PreviewFinalizer); ok {
+		if err := finalizer.FinalizePreview(sp.ctx, sp.previewMsgID); err != nil {
+			slog.Debug("stream preview finish: FinalizePreview failed (non-fatal)", "error", err)
+		}
 	}
 	slog.Debug("stream preview finish: success via UpdateMessage")
 	return true
