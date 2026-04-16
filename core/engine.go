@@ -3188,6 +3188,30 @@ func (e *Engine) processInteractiveEvents(state *interactiveState, session *Sess
 					stopTyping()
 					stopTyping = nil
 				}
+				// Reset per-turn accumulators so the next EventResult starts
+				// fresh. Without this, textParts keeps content from the
+				// previous turn (duplicates) and sp is already finalized
+				// (streaming appears broken). Mirrors the queued-message
+				// branch's reset logic below.
+				textParts = nil
+				segmentStart = 0
+				toolCount = 0
+				turnStart = time.Now()
+				firstEventLogged = false
+				waitStart = time.Now()
+				doneReaction = nil
+				state.mu.Lock()
+				nextPlatform := state.platform
+				nextReplyCtx := state.replyCtx
+				state.mu.Unlock()
+				nextRenderer := func(content string) string {
+					return e.renderOutgoingContentForWorkspace(nextPlatform, content, workspaceDir)
+				}
+				sp = newStreamPreview(e.streamPreview, nextPlatform, nextReplyCtx, e.ctx, nextRenderer)
+				cp = newCompactProgressWriter(e.ctx, nextPlatform, nextReplyCtx, e.agent.Name(), e.i18n.CurrentLang(), nextRenderer)
+				if ti, ok := nextPlatform.(TypingIndicator); ok {
+					stopTyping = ti.StartTyping(e.ctx, nextReplyCtx)
+				}
 				// Keep event loop running — next iteration consumes the
 				// injected message's EventResult.
 				continue
