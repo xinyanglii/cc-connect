@@ -449,6 +449,19 @@ func (cs *claudeSession) handleAssistant(raw map[string]any) {
 			if toolName == "AskUserQuestion" {
 				continue
 			}
+			// TodoWrite: emit a dedicated EventTodoUpdate carrying the
+			// parsed list so the engine can render/update a live todo
+			// card. Also emit the standard EventToolUse so the progress
+			// writer still tracks the call.
+			if strings.EqualFold(toolName, "TodoWrite") {
+				if todos := parseTodoWriteItems(item["input"]); len(todos) > 0 {
+					select {
+					case cs.events <- core.Event{Type: core.EventTodoUpdate, Todos: todos}:
+					case <-cs.ctx.Done():
+						return
+					}
+				}
+			}
 			inputSummary := summarizeInput(toolName, item["input"])
 			evt := core.Event{Type: core.EventToolUse, ToolName: toolName, ToolInput: inputSummary}
 			select {
@@ -570,21 +583,24 @@ func (cs *claudeSession) handleControlRequest(raw map[string]any) {
 	toolName, _ := request["tool_name"].(string)
 	input, _ := request["input"].(map[string]any)
 
-	// AskUserQuestion is special: its whole purpose is to ask the user.
-	// Auto-approving it (yolo/bypassPermissions) defeats the tool — it
-	// returns with no answer and the agent proceeds without the input it
-	// needed. Always route to the card-based question UI regardless of
-	// auto-approve state. dontAsk deliberately still denies (user wants
-	// zero interaction).
-	if toolName == "AskUserQuestion" && !cs.dontAsk.Load() {
-		slog.Info("claudeSession: AskUserQuestion (bypassing auto-approve)", "request_id", requestID)
+	// AskUserQuestion and ExitPlanMode are special: their whole purpose is
+	// to pause and get a user decision. Auto-approving them (yolo/
+	// bypassPermissions) defeats the tool — it returns without the needed
+	// input, the agent proceeds on assumptions. Always route these through
+	// the interactive UI regardless of auto-approve state. dontAsk still
+	// denies (user opted into zero interaction).
+	if !cs.dontAsk.Load() && (toolName == "AskUserQuestion" || toolName == "ExitPlanMode") {
+		slog.Info("claudeSession: user-interaction tool (bypassing auto-approve)",
+			"request_id", requestID, "tool", toolName)
 		evt := core.Event{
 			Type:         core.EventPermissionRequest,
 			RequestID:    requestID,
 			ToolName:     toolName,
 			ToolInput:    summarizeInput(toolName, input),
 			ToolInputRaw: input,
-			Questions:    parseUserQuestions(input),
+		}
+		if toolName == "AskUserQuestion" {
+			evt.Questions = parseUserQuestions(input)
 		}
 		select {
 		case cs.events <- evt:

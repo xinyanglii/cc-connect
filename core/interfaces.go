@@ -149,6 +149,15 @@ type MessageUpdater interface {
 	UpdateMessage(ctx context.Context, replyCtx any, content string) error
 }
 
+// TodoListRenderer is an optional interface for platforms that render
+// Claude's TodoWrite list as a live-updating card. The first call creates
+// the card; subsequent calls with the same (platform, replyCtx) update
+// the same card in place so the user watches task progress without
+// cluttering the chat with repeated todo snapshots.
+type TodoListRenderer interface {
+	RenderTodoList(ctx context.Context, replyCtx any, todos []TodoItem) error
+}
+
 // ProgressStyleProvider is an optional interface for platforms that expose
 // a preferred style for intermediate progress rendering.
 // Typical values: "legacy", "compact", "card".

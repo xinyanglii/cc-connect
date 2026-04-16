@@ -2944,6 +2944,13 @@ func (e *Engine) processInteractiveEvents(state *interactiveState, session *Sess
 				}
 			}
 
+		case EventTodoUpdate:
+			if renderer, ok := p.(TodoListRenderer); ok {
+				if err := renderer.RenderTodoList(e.ctx, replyCtx, event.Todos); err != nil {
+					slog.Debug("RenderTodoList failed (non-fatal)", "error", err)
+				}
+			}
+
 		case EventPermissionRequest:
 			isAskQuestion := event.ToolName == "AskUserQuestion" && len(event.Questions) > 0
 

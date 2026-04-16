@@ -168,7 +168,15 @@ const (
 	EventError             EventType = "error"              // error occurred
 	EventPermissionRequest EventType = "permission_request" // agent requests permission via stdio protocol
 	EventThinking          EventType = "thinking"           // thinking/processing status
+	EventTodoUpdate        EventType = "todo_update"        // agent updated its TodoWrite list
 )
+
+// TodoItem is one row in a TodoWrite list.
+type TodoItem struct {
+	Content    string `json:"content"`
+	ActiveForm string `json:"activeForm"`
+	Status     string `json:"status"` // "pending" | "in_progress" | "completed"
+}
 
 // UserQuestion represents a structured question from AskUserQuestion.
 type UserQuestion struct {
@@ -198,6 +206,7 @@ type Event struct {
 	SessionID    string         // agent-managed session ID for conversation continuity
 	RequestID    string         // unique request ID for EventPermissionRequest
 	Questions    []UserQuestion // populated when ToolName == "AskUserQuestion"
+	Todos        []TodoItem     // populated for EventTodoUpdate
 	Done         bool
 	Error        error
 	InputTokens  int // token usage from agent result events

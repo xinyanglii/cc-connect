@@ -1162,6 +1162,42 @@ func parseUserQuestions(input map[string]any) []core.UserQuestion {
 	return questions
 }
 
+// parseTodoWriteItems extracts todo items from a TodoWrite tool input.
+// Accepts either a parsed map (from stream-json) or a JSON string.
+func parseTodoWriteItems(input any) []core.TodoItem {
+	var raw map[string]any
+	switch v := input.(type) {
+	case map[string]any:
+		raw = v
+	case string:
+		if err := json.Unmarshal([]byte(v), &raw); err != nil {
+			return nil
+		}
+	default:
+		return nil
+	}
+	todosRaw, ok := raw["todos"].([]any)
+	if !ok {
+		return nil
+	}
+	var items []core.TodoItem
+	for _, tRaw := range todosRaw {
+		tMap, ok := tRaw.(map[string]any)
+		if !ok {
+			continue
+		}
+		item := core.TodoItem{
+			Content:    strVal(tMap, "content"),
+			ActiveForm: strVal(tMap, "activeForm"),
+			Status:     strVal(tMap, "status"),
+		}
+		if item.Content != "" {
+			items = append(items, item)
+		}
+	}
+	return items
+}
+
 func strVal(m map[string]any, key string) string {
 	v, _ := m[key].(string)
 	return v
