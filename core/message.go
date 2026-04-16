@@ -153,7 +153,8 @@ type Message struct {
 	ChannelKey   string              // platform-provided channel identifier for workspace binding (optional)
 	ReplyCtx     any             // platform-specific context needed for replying
 	FromVoice    bool            // true if message originated from voice transcription
-	ModeOverride string          // if set, temporarily override agent permission mode for this message
+	ModeOverride  string          // if set, temporarily override agent permission mode for this message
+	ModelOverride string          // if set, override agent model when starting a fresh session (only honored for new_per_run paths; reuse cannot swap model at runtime)
 }
 
 // EventType distinguishes different kinds of agent output.

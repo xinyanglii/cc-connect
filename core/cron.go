@@ -33,6 +33,7 @@ type CronJob struct {
 	Mute        bool      `json:"mute,omitempty"`         // suppress ALL messages (start + result); job runs silently
 	SessionMode string    `json:"session_mode,omitempty"` // "" or "reuse" = share active session; "new_per_run" = fresh session each run
 	Mode        string    `json:"mode,omitempty"`         // permission mode override for this job; "" = use project default
+	Model       string    `json:"model,omitempty"`        // agent model override; ONLY valid with new_per_run (Claude CLI --model is launch-time)
 	TimeoutMins *int      `json:"timeout_mins,omitempty"` // nil = default 30m wait; 0 = no limit; >0 = minutes
 	CreatedAt   time.Time `json:"created_at"`
 	LastRun     time.Time `json:"last_run,omitempty"`
@@ -94,6 +95,12 @@ func validateCronJob(j *CronJob) error {
 	}
 	if j.TimeoutMins != nil && *j.TimeoutMins < 0 {
 		return fmt.Errorf("timeout_mins must be >= 0")
+	}
+	// Model override requires new_per_run. Claude CLI's --model is fixed at
+	// subprocess launch; reuse mode shares an already-running subprocess so
+	// the override cannot take effect. Fail fast instead of silently ignoring.
+	if j.Model != "" && mode != "new_per_run" {
+		return fmt.Errorf("--model override requires --session-mode new-per-run (got %q)", j.SessionMode)
 	}
 	return nil
 }
