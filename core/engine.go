@@ -4459,7 +4459,11 @@ func replyFooterContextText(usage *ContextUsage, i18n *I18n) string {
 		case usage.InputTokens > 0 || usage.OutputTokens > 0:
 			usedTokens = usage.InputTokens + usage.OutputTokens
 		default:
-			return ""
+			// No token data yet (pre-first-result). Still show the
+			// context indicator at 100% rather than falling through to
+			// the 5h Max-plan quota indicator, which means a completely
+			// different thing to the user.
+			return i18n.Tf(MsgReplyFooterRemaining, 100)
 		}
 	}
 

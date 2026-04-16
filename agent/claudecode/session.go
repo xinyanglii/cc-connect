@@ -541,24 +541,38 @@ func (cs *claudeSession) handleResult(raw map[string]any) {
 
 	var inputTokens, outputTokens int
 	if usage, ok := raw["usage"].(map[string]any); ok {
-		// Claude API splits the input budget across three buckets:
-		//   input_tokens               — fresh, non-cached input for this turn
+		// Claude API splits input across three buckets (all count against
+		// the context window for a single call):
+		//   input_tokens               — fresh non-cached input
 		//   cache_read_input_tokens    — prior turns served from cache
-		//   cache_creation_input_tokens — tokens written into cache this turn
-		// For the user-facing "how full is the context window" indicator
-		// we want the total, which is the sum of all three (all count
-		// against the window limit).
-		var cacheRead, cacheCreate int
-		if v, ok := usage["input_tokens"].(float64); ok {
-			inputTokens = int(v)
+		//   cache_creation_input_tokens — tokens written into cache this call
+		//
+		// The result event's TOP-LEVEL usage SUMS across iterations for a
+		// multi-iteration (tool-use) turn — so a 10-tool turn might show
+		// input_tokens=6M even though each individual API call was ~600k.
+		// To get the actual context snapshot, read from the LAST iteration.
+		// Falls back to top-level for single-iteration turns.
+		readIterTokens := func(m map[string]any) int {
+			var in, read, create int
+			if v, ok := m["input_tokens"].(float64); ok {
+				in = int(v)
+			}
+			if v, ok := m["cache_read_input_tokens"].(float64); ok {
+				read = int(v)
+			}
+			if v, ok := m["cache_creation_input_tokens"].(float64); ok {
+				create = int(v)
+			}
+			return in + read + create
 		}
-		if v, ok := usage["cache_read_input_tokens"].(float64); ok {
-			cacheRead = int(v)
+		if iters, ok := usage["iterations"].([]any); ok && len(iters) > 0 {
+			if lastIter, ok := iters[len(iters)-1].(map[string]any); ok {
+				inputTokens = readIterTokens(lastIter)
+			}
 		}
-		if v, ok := usage["cache_creation_input_tokens"].(float64); ok {
-			cacheCreate = int(v)
+		if inputTokens == 0 {
+			inputTokens = readIterTokens(usage)
 		}
-		inputTokens += cacheRead + cacheCreate
 		if v, ok := usage["output_tokens"].(float64); ok {
 			outputTokens = int(v)
 		}
@@ -851,6 +865,7 @@ func (cs *claudeSession) GetContextUsage() *core.ContextUsage {
 	if inputTokens == 0 && cs.contextWindow == 0 {
 		return nil
 	}
+	slog.Info("GetContextUsage: returning", "inputTokens", inputTokens, "contextWindow", cs.contextWindow)
 	return &core.ContextUsage{
 		UsedTokens:    inputTokens,
 		InputTokens:   inputTokens,
