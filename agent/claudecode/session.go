@@ -865,7 +865,6 @@ func (cs *claudeSession) GetContextUsage() *core.ContextUsage {
 	if inputTokens == 0 && cs.contextWindow == 0 {
 		return nil
 	}
-	slog.Info("GetContextUsage: returning", "inputTokens", inputTokens, "contextWindow", cs.contextWindow)
 	return &core.ContextUsage{
 		UsedTokens:    inputTokens,
 		InputTokens:   inputTokens,

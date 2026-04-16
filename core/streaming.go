@@ -251,6 +251,12 @@ func (sp *streamPreview) freeze() {
 				_ = updater.UpdateMessage(sp.ctx, sp.previewMsgID, text)
 			}
 		}
+		// Close CardKit-style streaming_mode so the frozen preview is not
+		// left animating a typewriter indefinitely. No-op for platforms
+		// that don't implement PreviewFinalizer.
+		if finalizer, ok := sp.platform.(PreviewFinalizer); ok {
+			_ = finalizer.FinalizePreview(sp.ctx, sp.previewMsgID)
+		}
 	}
 
 	sp.degraded = true

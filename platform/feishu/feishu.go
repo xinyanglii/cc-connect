@@ -3361,13 +3361,22 @@ func (p *Platform) DeletePreviewMessage(ctx context.Context, previewHandle any) 
 		return core.ErrNotSupported
 	}
 
-	h, ok := previewHandle.(*feishuPreviewHandle)
-	if !ok {
+	var messageID string
+	switch h := previewHandle.(type) {
+	case *feishuPreviewHandle:
+		messageID = h.messageID
+	case *feishuStreamingHandle:
+		// CardKit streaming path: close streaming_mode first so the card
+		// doesn't animate on any cached client before deletion, then
+		// delete the IM message that references the CardKit card.
+		_ = p.setCardStreamingMode(ctx, h.cardID, false, h.nextSeq())
+		messageID = h.messageID
+	default:
 		return fmt.Errorf("%s: invalid preview handle type %T", p.tag(), previewHandle)
 	}
 
 	req := larkim.NewDeleteMessageReqBuilder().
-		MessageId(h.messageID).
+		MessageId(messageID).
 		Build()
 	return p.withTransientRetry(ctx, "delete preview message", func() error {
 		return p.withFreshTenantAccessTokenRetry(ctx, "delete preview message", func(client *lark.Client, options ...larkcore.RequestOptionFunc) error {
