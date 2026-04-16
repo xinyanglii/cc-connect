@@ -165,20 +165,20 @@ func buildAskqMultiCardJSON(q core.UserQuestion, qIdx, total int) string {
 		},
 	})
 
+	// Schema 1.0 format (flat elements at top level, no body wrapper).
+	// Required for the callback response card — renderCardMap outputs v1
+	// and Feishu can only in-place update a card with a same-schema card.
 	card := map[string]any{
-		"schema": "2.0",
 		"config": map[string]any{"wide_screen_mode": true},
 		"header": map[string]any{
 			"title":    map[string]any{"tag": "plain_text", "content": title},
 			"template": "blue",
 		},
-		"body": map[string]any{
-			"elements": []any{
-				map[string]any{
-					"tag":      "form",
-					"name":     askqMultiFormName,
-					"elements": formElems,
-				},
+		"elements": []map[string]any{
+			{
+				"tag":      "form",
+				"name":     askqMultiFormName,
+				"elements": formElems,
 			},
 		},
 	}
