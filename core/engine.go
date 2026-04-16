@@ -307,6 +307,13 @@ type interactiveState struct {
 	// EventResult is about to be processed, so that output/typing targets the
 	// injected message rather than the original turn's replyCtx. Guarded by mu.
 	pendingInjects []pendingInject
+
+	// btwInjectStops holds typing-reaction stop funcs for /btw messages
+	// injected into the current turn. Unlike pendingInjects these do NOT
+	// increment outstandingMessages (Claude CLI merges them into one
+	// EventResult), so all pending stops are flushed together when the
+	// turn finishes (processInteractiveEvents defer).
+	btwInjectStops []func()
 }
 
 type pendingInject struct {
@@ -1711,6 +1718,19 @@ func (e *Engine) handleMessage(p Platform, msg *Message) {
 				e.reply(p, msg.ReplyCtx, e.i18n.T(MsgBtwSendFailed))
 				return
 			}
+			// Visible ack on the injected message so the user knows it
+			// landed. /btw merges into the current turn (1 EventResult
+			// covers both original prompt and inject), so the typing
+			// reaction stays on until the turn's stopTyping fires via
+			// sp.finish / defer in processInteractiveEvents.
+			if ti, ok := p.(TypingIndicator); ok {
+				stop := ti.StartTyping(e.ctx, msg.ReplyCtx)
+				if stop != nil {
+					state.mu.Lock()
+					state.btwInjectStops = append(state.btwInjectStops, stop)
+					state.mu.Unlock()
+				}
+			}
 			// /btw merges into the current turn (Claude CLI incorporates it
 			// into the same EventResult). Do NOT increment outstandingMessages
 			// or add to pendingInjects — those assume 1 send → 1 result.
@@ -2682,10 +2702,19 @@ func (e *Engine) processInteractiveEvents(state *interactiveState, session *Sess
 		state.mu.Lock()
 		orphaned := state.pendingInjects
 		state.pendingInjects = nil
+		btwStops := state.btwInjectStops
+		state.btwInjectStops = nil
 		state.mu.Unlock()
 		for _, inj := range orphaned {
 			if inj.stopTyping != nil {
 				inj.stopTyping()
+			}
+		}
+		// Clear reactions on /btw-injected messages — their content was
+		// merged into the just-finished turn's EventResult.
+		for _, stop := range btwStops {
+			if stop != nil {
+				stop()
 			}
 		}
 	}()
