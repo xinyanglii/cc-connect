@@ -19,17 +19,12 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 	"unicode/utf8"
 )
 
 const maxPlatformMessageLen = 4000
 
-// maxOutstandingInjections caps how many mid-turn messages can be in flight
-// to the agent subprocess at once. Prevents runaway cost from rapid-fire
-// spam. Not user-configurable in v1 — raise if users hit this regularly.
-const maxOutstandingInjections int32 = 10
 const telegramBotCommandLimit = 100
 const maxQueuedMessages = 5 // cap queued messages to bound memory usage
 
@@ -293,26 +288,6 @@ type interactiveState struct {
 	modelSwitch            *modelSwitchState
 	lastAutoCompressAt     time.Time
 	lastAutoCompressTokens int
-
-	// outstandingMessages tracks user messages already written to the agent
-	// subprocess stdin that have not yet produced their EventResult. Each
-	// Send() increments; each EventResult decrements. processInteractiveEvents
-	// continues the loop while this is > 0 so that multi-turn batches (user
-	// sent a message mid-response) complete on the same mutex hold.
-	// Per-interactiveState; reset on cleanupInteractiveState.
-	outstandingMessages atomic.Int32
-
-	// pendingInjects holds per-inject context for mid-turn injected messages.
-	// Each inject appends one; the event loop pops FIFO when the corresponding
-	// EventResult is about to be processed, so that output/typing targets the
-	// injected message rather than the original turn's replyCtx. Guarded by mu.
-	pendingInjects []pendingInject
-}
-
-type pendingInject struct {
-	platform   Platform
-	replyCtx   any
-	stopTyping func()
 }
 
 type deleteModeState struct {
@@ -1667,9 +1642,9 @@ func (e *Engine) handleMessage(p Platform, msg *Message) {
 		//
 		// Rationale: Claude CLI emits ONE EventResult per turn regardless of
 		// how many user messages were sent during that turn — so default
-		// inject caused the event loop's outstandingMessages counter to
-		// desync (N sends → 1 result), leading to stuck loops and
-		// mis-addressed replies. /btw is the explicit mid-turn inject.
+		// inject caused N sends → 1 result, leading to mis-addressed
+		// replies. /btw is the explicit mid-turn inject without result
+		// bookkeeping; queued messages run as fresh turns.
 		trimmed := strings.TrimSpace(content)
 		if isBtwCommand(trimmed) {
 			injectContent := strings.TrimSpace(trimmed[len(matchBtwPrefix(trimmed)):])
@@ -2272,7 +2247,6 @@ func (e *Engine) processInteractiveMessageWith(p Platform, msg *Message, session
 	// Send until the prompt turn finishes (e.g. ACP session/prompt); they may emit
 	// EventPermissionRequest while blocked — the event loop must run in parallel.
 	sendDone := make(chan error, 1)
-	state.outstandingMessages.Add(1) // matched by this turn's EventResult
 	go func() {
 		sendDone <- state.agentSession.Send(promptContent, msg.Images, msg.Files)
 	}()
@@ -2600,17 +2574,6 @@ func (e *Engine) cleanupInteractiveState(sessionKey string, expected ...*interac
 	if ok && state != nil {
 		state.markStopped()
 		e.notifyDroppedQueuedMessages(state, fmt.Errorf("session reset"))
-		// Stop any dangling mid-turn inject typing indicators so reactions
-		// don't remain stuck on injected messages after a reset.
-		state.mu.Lock()
-		pending := state.pendingInjects
-		state.pendingInjects = nil
-		state.mu.Unlock()
-		for _, inj := range pending {
-			if inj.stopTyping != nil {
-				inj.stopTyping()
-			}
-		}
 	}
 
 	// Close the agent session BEFORE deleting from the map.
@@ -2697,18 +2660,6 @@ func (e *Engine) processInteractiveEvents(state *interactiveState, session *Sess
 		}
 		if doneReaction != nil {
 			doneReaction()
-		}
-		// Stop any inject reactions that never got consumed (rare race:
-		// msg injected during loop teardown). Prevents stale entries
-		// from being applied to a future turn's message.
-		state.mu.Lock()
-		orphaned := state.pendingInjects
-		state.pendingInjects = nil
-		state.mu.Unlock()
-		for _, inj := range orphaned {
-			if inj.stopTyping != nil {
-				inj.stopTyping()
-			}
 		}
 	}()
 
@@ -3228,80 +3179,6 @@ func (e *Engine) processInteractiveEvents(state *interactiveState, session *Sess
 				}
 			}
 
-			// This EventResult completes one outstanding message.
-			// Decrement the counter. If > 0 remains (mid-turn injections
-			// still in flight), continue the loop — their EventResults are
-			// coming. Don't release the mutex yet.
-			remaining := state.outstandingMessages.Add(-1)
-			if remaining < 0 {
-				// Invariant violation: more results than sends. Reset to
-				// 0 and log — continuing is safer than panicking.
-				slog.Warn("outstandingMessages went negative; resetting", "observed", remaining)
-				state.outstandingMessages.Store(0)
-				remaining = 0
-			}
-			if remaining > 0 {
-				slog.Debug("mid-turn injection in-flight; looping for next EventResult",
-					"remaining", remaining)
-				// Stop typing for the just-finished turn.
-				if stopTyping != nil {
-					stopTyping()
-					stopTyping = nil
-				}
-				// Pick up next turn's target: an injected message (popped
-				// FIFO) takes priority over the session's default replyCtx.
-				// If present, its typing indicator was already started at
-				// inject time — transfer ownership instead of re-starting.
-				state.mu.Lock()
-				nextPlatform := state.platform
-				nextReplyCtx := state.replyCtx
-				var nextInjectStop func()
-				hasInject := false
-				if len(state.pendingInjects) > 0 {
-					inj := state.pendingInjects[0]
-					state.pendingInjects = state.pendingInjects[1:]
-					if inj.platform != nil {
-						nextPlatform = inj.platform
-					}
-					if inj.replyCtx != nil {
-						nextReplyCtx = inj.replyCtx
-					}
-					nextInjectStop = inj.stopTyping
-					hasInject = true
-					// Update session-level reply context so the next
-					// EventResult's reply is addressed to this message.
-					state.platform = nextPlatform
-					state.replyCtx = nextReplyCtx
-				}
-				state.mu.Unlock()
-				// Reset per-turn accumulators so the next EventResult starts
-				// fresh. Without this, textParts keeps content from the
-				// previous turn (duplicates) and sp is already finalized
-				// (streaming appears broken).
-				textParts = nil
-				segmentStart = 0
-				toolCount = 0
-				turnStart = time.Now()
-				firstEventLogged = false
-				waitStart = time.Now()
-				doneReaction = nil
-				nextRenderer := func(content string) string {
-					return e.renderOutgoingContentForWorkspace(nextPlatform, content, workspaceDir)
-				}
-				sp = newStreamPreview(e.streamPreview, nextPlatform, nextReplyCtx, e.ctx, nextRenderer)
-				cp = newCompactProgressWriter(e.ctx, nextPlatform, nextReplyCtx, e.agent.Name(), e.i18n.CurrentLang(), nextRenderer)
-				if hasInject {
-					// Reaction already on inject's message; just own the
-					// stop so it fires when this turn's result arrives.
-					stopTyping = nextInjectStop
-				} else if ti, ok := nextPlatform.(TypingIndicator); ok {
-					stopTyping = ti.StartTyping(e.ctx, nextReplyCtx)
-				}
-				// Keep event loop running — next iteration consumes the
-				// injected message's EventResult.
-				continue
-			}
-
 			// Check for queued messages — if present, continue the event loop
 			// for the next turn instead of returning.
 			state.mu.Lock()
@@ -3340,7 +3217,6 @@ func (e *Engine) processInteractiveEvents(state *interactiveState, session *Sess
 				queuedPrompt := e.buildSenderPrompt(queued.content, queued.userID, queued.userName, queued.msgPlatform, queued.msgSessionKey)
 
 				nextSend := make(chan error, 1)
-				state.outstandingMessages.Add(1)
 				go func() {
 					nextSend <- state.agentSession.Send(queuedPrompt, queued.images, queued.files)
 				}()
@@ -3504,7 +3380,6 @@ func (e *Engine) drainPendingMessages(state *interactiveState, session *Session,
 		session.AddHistory("user", queued.content)
 
 		sendDone := make(chan error, 1)
-		state.outstandingMessages.Add(1)
 		go func() {
 			sendDone <- state.agentSession.Send(prompt, queued.images, queued.files)
 		}()

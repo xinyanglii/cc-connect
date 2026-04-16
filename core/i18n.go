@@ -432,9 +432,8 @@ const (
 	MsgCommandDisabled   MsgKey = "command_disabled"
 	MsgAdminRequired     MsgKey = "admin_required"
 	MsgRateLimited       MsgKey = "rate_limited"
-	MsgBtwSent           MsgKey = "btw_sent"
-	MsgBtwSendFailed      MsgKey = "btw_send_failed"
-	MsgTooManyOutstanding MsgKey = "too_many_outstanding"
+	MsgBtwSent       MsgKey = "btw_sent"
+	MsgBtwSendFailed MsgKey = "btw_send_failed"
 
 	MsgWhoamiTitle     MsgKey = "whoami_title"
 	MsgWhoamiCardTitle MsgKey = "whoami_card_title"
@@ -2980,13 +2979,6 @@ var messages = map[MsgKey]map[Language]string{
 		LangTraditionalChinese: "❌ 訊息注入目前會話失敗。",
 		LangJapanese:           "❌ 現在のセッションへのメッセージ注入に失敗しました。",
 		LangSpanish:            "❌ Error al inyectar el mensaje en la sesión actual.",
-	},
-	MsgTooManyOutstanding: {
-		LangEnglish:            "⏳ Too many pending messages. Wait for the current responses to complete before sending more.",
-		LangChinese:            "⏳ 待处理消息过多，请等待当前回复完成后再发送。",
-		LangTraditionalChinese: "⏳ 待處理訊息過多，請等待目前回覆完成後再傳送。",
-		LangJapanese:           "⏳ 保留中のメッセージが多すぎます。現在の応答が完了してから送信してください。",
-		LangSpanish:            "⏳ Demasiados mensajes pendientes. Espera a que terminen las respuestas actuales.",
 	},
 	MsgWhoamiTitle: {
 		LangEnglish:            "🪪 **Your Identity**",
