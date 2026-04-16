@@ -1660,90 +1660,72 @@ func (e *Engine) handleMessage(p Platform, msg *Message) {
 	session := sessions.GetOrCreateActive(msg.SessionKey)
 	sessions.UpdateUserMeta(msg.SessionKey, msg.UserName, msg.ChatName)
 	if !session.TryLock() {
-		// Session is busy — inject the new message directly into the running
-		// agent subprocess (mid-turn injection). Claude CLI 2.1.104+ handles
-		// multiple in-flight user messages natively: each produces its own
-		// EventResult in order. The event loop tracks outstanding count.
+		// Session is busy. Two behaviors based on prefix:
+		//   /btw <text>  → mid-turn inject (merges into current turn, Claude
+		//                  CLI treats it as a side-note during the response)
+		//   <other text> → queued to process as a fresh next turn
 		//
-		// /btw <text> is kept as a backwards-compatible alias that simply
-		// strips the prefix. The result is identical to sending <text>
-		// directly.
-		injectContent := content
+		// Rationale: Claude CLI emits ONE EventResult per turn regardless of
+		// how many user messages were sent during that turn — so default
+		// inject caused the event loop's outstandingMessages counter to
+		// desync (N sends → 1 result), leading to stuck loops and
+		// mis-addressed replies. /btw is the explicit mid-turn inject.
 		trimmed := strings.TrimSpace(content)
 		if isBtwCommand(trimmed) {
-			injectContent = strings.TrimSpace(trimmed[len(matchBtwPrefix(trimmed)):])
-		}
-		if injectContent == "" {
-			return
-		}
-		e.interactiveMu.Lock()
-		state, ok := e.interactiveStates[interactiveKey]
-		e.interactiveMu.Unlock()
-
-		// No active interactiveState yet (pre-spawn) — fall back to queue so
-		// the subprocess, once ready, picks up this message in order.
-		if !ok || state == nil || state.agentSession == nil || !state.agentSession.Alive() {
-			if e.queueMessageForBusySession(p, msg, interactiveKey) {
-				// Race guard: drain loop may have just finished.
-				if session.TryLock() {
-					go e.drainOrphanedQueue(session, sessions, interactiveKey, agent, resolvedWorkspace)
-				}
+			injectContent := strings.TrimSpace(trimmed[len(matchBtwPrefix(trimmed)):])
+			if injectContent == "" {
 				return
 			}
-			e.reply(p, msg.ReplyCtx, e.i18n.T(MsgPreviousProcessing))
+			e.interactiveMu.Lock()
+			state, ok := e.interactiveStates[interactiveKey]
+			e.interactiveMu.Unlock()
+
+			if !ok || state == nil || state.agentSession == nil || !state.agentSession.Alive() {
+				if e.queueMessageForBusySession(p, msg, interactiveKey) {
+					if session.TryLock() {
+						go e.drainOrphanedQueue(session, sessions, interactiveKey, agent, resolvedWorkspace)
+					}
+					return
+				}
+				e.reply(p, msg.ReplyCtx, e.i18n.T(MsgPreviousProcessing))
+				return
+			}
+
+			// Auto-deny pending permission so the injected message takes priority.
+			state.mu.Lock()
+			if state.pending != nil {
+				pendingReq := state.pending
+				state.pending = nil
+				state.mu.Unlock()
+				_ = state.agentSession.RespondPermission(pendingReq.RequestID, PermissionResult{
+					Behavior: "deny",
+					Message:  "Superseded by /btw",
+				})
+				close(pendingReq.Resolved)
+			} else {
+				state.mu.Unlock()
+			}
+
+			if err := state.agentSession.Send(injectContent, msg.Images, msg.Files); err != nil {
+				slog.Error("btw inject failed", "error", err)
+				e.reply(p, msg.ReplyCtx, e.i18n.T(MsgBtwSendFailed))
+				return
+			}
+			// /btw merges into the current turn (Claude CLI incorporates it
+			// into the same EventResult). Do NOT increment outstandingMessages
+			// or add to pendingInjects — those assume 1 send → 1 result.
+			slog.Info("btw injected (merged into current turn)", "session", msg.SessionKey)
 			return
 		}
 
-		// Rate limit: refuse if too many outstanding mid-turn injections.
-		if state.outstandingMessages.Load() >= maxOutstandingInjections {
-			slog.Info("mid-turn injection rate-limited",
-				"session", msg.SessionKey, "outstanding", state.outstandingMessages.Load())
-			e.reply(p, msg.ReplyCtx, e.i18n.T(MsgTooManyOutstanding))
+		// Non-/btw busy-path message: queue for next turn.
+		if e.queueMessageForBusySession(p, msg, interactiveKey) {
+			if session.TryLock() {
+				go e.drainOrphanedQueue(session, sessions, interactiveKey, agent, resolvedWorkspace)
+			}
 			return
 		}
-
-		// Auto-deny any pending permission so the new user message takes
-		// priority. Matches native Claude Code TUI behavior.
-		state.mu.Lock()
-		if state.pending != nil {
-			pendingReq := state.pending
-			state.pending = nil
-			state.mu.Unlock()
-			_ = state.agentSession.RespondPermission(pendingReq.RequestID, PermissionResult{
-				Behavior: "deny",
-				Message:  "Superseded by new user message",
-			})
-			close(pendingReq.Resolved)
-			slog.Info("auto-denied pending permission for new mid-turn message",
-				"request_id", pendingReq.RequestID)
-		} else {
-			state.mu.Unlock()
-		}
-
-		// Inject and track.
-		if err := state.agentSession.Send(injectContent, msg.Images, msg.Files); err != nil {
-			slog.Error("mid-turn inject failed", "error", err)
-			e.reply(p, msg.ReplyCtx, e.i18n.T(MsgBtwSendFailed))
-			return
-		}
-		state.outstandingMessages.Add(1)
-		// Visible ack: add "processing" reaction on the new message. Queued
-		// for FIFO pickup in the event loop's continue branch, which also
-		// retargets reply/streaming to this message's replyCtx.
-		var injectStop func()
-		if ti, ok := p.(TypingIndicator); ok {
-			injectStop = ti.StartTyping(e.ctx, msg.ReplyCtx)
-		}
-		state.mu.Lock()
-		state.pendingInjects = append(state.pendingInjects, pendingInject{
-			platform:   p,
-			replyCtx:   msg.ReplyCtx,
-			stopTyping: injectStop,
-		})
-		state.mu.Unlock()
-		slog.Info("mid-turn injected",
-			"session", msg.SessionKey,
-			"outstanding", state.outstandingMessages.Load())
+		e.reply(p, msg.ReplyCtx, e.i18n.T(MsgPreviousProcessing))
 		return
 	}
 
