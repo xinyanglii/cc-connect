@@ -239,6 +239,34 @@ type Agent interface {
 	Stop() error
 }
 
+// AgentSessionOptions carries optional per-session overrides that should only
+// apply to a fresh subprocess (e.g. a cron new_per_run or heartbeat side
+// session). Fields left as zero values fall back to the agent's default
+// configuration captured at construction time. This type is extended over
+// time as more per-session overrides become useful.
+type AgentSessionOptions struct {
+	// Model overrides the agent's default model for this session.
+	// Empty string = use agent default.
+	// Runtime model switching on an existing subprocess is NOT supported
+	// (Claude CLI's --model is launch-time only); callers must use this
+	// option only when starting a fresh session.
+	Model string
+}
+
+// AgentWithOptions is an optional interface extension that lets an Agent
+// accept AgentSessionOptions at session creation. Agents that do not
+// implement this interface fall back to plain StartSession with no override.
+//
+// The engine type-asserts to this interface where per-session overrides are
+// meaningful (e.g. cron jobs with model override, heartbeat side sessions).
+type AgentWithOptions interface {
+	Agent
+	// StartSessionWithOptions behaves like StartSession but applies the given
+	// options during subprocess construction. When opts is the zero value,
+	// the behavior is identical to StartSession.
+	StartSessionWithOptions(ctx context.Context, sessionID string, opts AgentSessionOptions) (AgentSession, error)
+}
+
 // AgentSession represents a running interactive agent session with a persistent process.
 type AgentSession interface {
 	// Send sends a user message (with optional images and files) to the running agent process.
