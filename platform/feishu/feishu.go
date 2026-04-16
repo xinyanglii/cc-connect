@@ -1903,24 +1903,21 @@ func buildImagePreviewCardJSON(imageKey string, img core.ImageAttachment) string
 	}
 	meta := fmt.Sprintf("`%s`  ·  %s  ·  %s", filename, img.MimeType, humanSize(len(img.Data)))
 
+	// Schema 1.0 (flat elements) for consistency with renderCardMap and
+	// simpler img element format. v2 img element has stricter keys that
+	// the card-entity service rejects when extras like mode/preview are
+	// wrong; v1 is more forgiving.
 	card := map[string]any{
-		"schema": "2.0",
 		"config": map[string]any{"wide_screen_mode": true},
-		"body": map[string]any{
-			"elements": []any{
-				map[string]any{
-					"tag":           "img",
-					"img_key":       imageKey,
-					"alt":           map[string]any{"tag": "plain_text", "content": filename},
-					"mode":          "fit_horizontal",
-					"preview":       true,
-					"custom_width":  false,
-					"compact_width": false,
-				},
-				map[string]any{
-					"tag":      "note",
-					"elements": []map[string]any{{"tag": "lark_md", "content": meta}},
-				},
+		"elements": []map[string]any{
+			{
+				"tag":     "img",
+				"img_key": imageKey,
+				"alt":     map[string]any{"tag": "plain_text", "content": filename},
+			},
+			{
+				"tag":      "note",
+				"elements": []map[string]any{{"tag": "lark_md", "content": meta}},
 			},
 		},
 	}
