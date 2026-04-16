@@ -1512,6 +1512,7 @@ func buildHeartbeatConfig(hc config.HeartbeatConfig) core.HeartbeatConfig {
 	if hc.TimeoutMins != nil {
 		cfg.TimeoutMins = *hc.TimeoutMins
 	}
+	cfg.Model = hc.Model
 	return cfg
 }
 

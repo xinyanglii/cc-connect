@@ -220,3 +220,38 @@ func TestHeartbeatScheduler_Persistence(t *testing.T) {
 		t.Error("state file should be removed when no overrides remain")
 	}
 }
+
+// ── Model override integration ──────────────────────────────────────
+
+func TestHeartbeatConfig_ModelField(t *testing.T) {
+	// Basic struct field test — Model carries through Register → Status.
+	hs := NewHeartbeatScheduler("")
+	hs.Register("proj", HeartbeatConfig{
+		Enabled:    true,
+		SessionKey: "tg:1:1",
+		Model:      "sonnet",
+	}, nil, "")
+
+	entry := hs.entries["proj"]
+	if entry == nil {
+		t.Fatal("expected entry")
+	}
+	if entry.config.Model != "sonnet" {
+		t.Errorf("expected Model=sonnet, got %q", entry.config.Model)
+	}
+}
+
+func TestHeartbeatConfig_EmptyModelPreservesLegacyPath(t *testing.T) {
+	// Empty Model must produce a zero-string field — branch uses it to
+	// distinguish legacy (empty) from side-session (non-empty) path.
+	hs := NewHeartbeatScheduler("")
+	hs.Register("proj", HeartbeatConfig{
+		Enabled:    true,
+		SessionKey: "tg:1:1",
+	}, nil, "")
+
+	entry := hs.entries["proj"]
+	if entry.config.Model != "" {
+		t.Errorf("expected empty Model, got %q", entry.config.Model)
+	}
+}

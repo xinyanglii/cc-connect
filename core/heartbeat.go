@@ -20,6 +20,7 @@ type HeartbeatConfig struct {
 	Prompt       string // explicit prompt; empty = read HEARTBEAT.md
 	Silent       bool   // suppress "💓" notification
 	TimeoutMins  int
+	Model        string // agent model override; empty = inject into main session. When set, each tick spawns a fresh side session.
 }
 
 // HeartbeatStatus is returned by the /heartbeat command.
@@ -362,7 +363,7 @@ func (hs *HeartbeatScheduler) execute(entry *heartbeatEntry) {
 	timeout := time.Duration(cfg.TimeoutMins) * time.Minute
 	done := make(chan error, 1)
 	go func() {
-		done <- entry.engine.ExecuteHeartbeat(cfg.SessionKey, prompt, cfg.Silent)
+		done <- entry.engine.ExecuteHeartbeat(cfg.SessionKey, prompt, cfg.Silent, cfg.Model)
 	}()
 
 	var err error

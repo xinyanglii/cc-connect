@@ -252,6 +252,7 @@ type HeartbeatConfig struct {
 	Prompt       string `toml:"prompt,omitempty"`         // explicit prompt; if empty, reads HEARTBEAT.md from work_dir
 	Silent       *bool  `toml:"silent,omitempty"`         // suppress heartbeat notification; default true
 	TimeoutMins  *int   `toml:"timeout_mins,omitempty"`   // max execution time; default 30
+	Model        string `toml:"model,omitempty"`          // agent model override; empty = inject into main session. When set, each tick spawns a fresh side session with this model (~1-2s cold start cost per fire; avoid for interval_mins=1)
 }
 
 // AutoCompressConfig controls automatic context compression for a project.
