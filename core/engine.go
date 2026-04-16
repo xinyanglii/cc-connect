@@ -205,10 +205,11 @@ type Engine struct {
 	projectState     *ProjectStateStore
 
 	// Auto-compress settings
-	autoCompressEnabled   bool
-	autoCompressMaxTokens int
-	autoCompressMinGap    time.Duration
-	resetOnIdle           time.Duration
+	autoCompressEnabled      bool
+	autoCompressMaxTokens    int     // DEPRECATED: absolute override. 0 = use ThresholdPct path.
+	autoCompressThresholdPct float64 // fraction of effective window; default 0.80
+	autoCompressMinGap       time.Duration
+	resetOnIdle              time.Duration
 
 	// When true, append [ctx: ~N%] (or model self-report) to assistant replies shown on platforms.
 	showContextIndicator bool
@@ -496,10 +497,70 @@ func estimateTokensWithPendingAssistant(entries []HistoryEntry, pendingAssistant
 	return (count + 3) / 4
 }
 
+// resolveAutoCompressThresholdAndEstimate computes both the effective
+// trigger threshold and the best available token estimate for this turn.
+// See SetAutoCompressConfig for the threshold resolution rules.
+//
+// estimate prefers ContextUsageReporter.InputTokens (real API count) and
+// falls back to the rune-count heuristic passed in by the caller (used for
+// cc-connect's own user+assistant history text).
+func (e *Engine) resolveAutoCompressThresholdAndEstimate(state *interactiveState, heuristicEstimate int) (threshold, estimate int) {
+	// Prefer real input_tokens from the agent when available.
+	estimate = heuristicEstimate
+	var reportedWindow int
+	if state != nil && state.agentSession != nil {
+		if reporter, ok := state.agentSession.(ContextUsageReporter); ok {
+			if cu := reporter.GetContextUsage(); cu != nil {
+				if cu.InputTokens > 0 {
+					estimate = cu.InputTokens
+				}
+				if cu.ContextWindow > 0 {
+					reportedWindow = cu.ContextWindow
+				}
+			}
+		}
+	}
+
+	// Legacy absolute override wins. Logs a deprecation hint on first use.
+	if e.autoCompressMaxTokens > 0 {
+		return e.autoCompressMaxTokens, estimate
+	}
+
+	// Percentage path.
+	pct := e.autoCompressThresholdPct
+	if pct <= 0 || pct > 1 {
+		pct = 0.80
+	}
+	window := reportedWindow
+	if window <= 0 {
+		// Fallback: assume 200k (the current baseline for most Claude models).
+		// Better than the ancient 12k default — still wrong for Opus-4-6[1m]
+		// but at worst triggers 5x later than before, not 80x earlier.
+		window = 200_000
+	}
+	threshold = int(float64(window) * pct)
+	return threshold, estimate
+}
+
 // SetAutoCompressConfig configures automatic context compression.
-func (e *Engine) SetAutoCompressConfig(enabled bool, maxTokens int, minGap time.Duration) {
+//
+// Threshold resolution (evaluated at each turn):
+//  1. If maxTokens > 0 (legacy absolute): use it directly.
+//  2. Else: effective_window × thresholdPct, where effective_window comes
+//     from the session's ContextUsageReporter.ContextWindow (falling back
+//     to a conservative 200_000 if unknown).
+//
+// thresholdPct out of (0, 1] — values outside range or zero fall back to
+// the 0.80 default. 0.80 is conservative: Anthropic's own Claude CLI
+// auto-compact triggers at ~90%, so 80% gives cc-connect first shot
+// while leaving headroom before the CLI interferes (avoids double-compact).
+func (e *Engine) SetAutoCompressConfig(enabled bool, maxTokens int, thresholdPct float64, minGap time.Duration) {
 	e.autoCompressEnabled = enabled
 	e.autoCompressMaxTokens = maxTokens
+	if thresholdPct <= 0 || thresholdPct > 1 {
+		thresholdPct = 0.80
+	}
+	e.autoCompressThresholdPct = thresholdPct
 	if minGap <= 0 {
 		minGap = 30 * time.Minute
 	}
@@ -2910,15 +2971,19 @@ func (e *Engine) processInteractiveEvents(state *interactiveState, session *Sess
 
 			contextEstimate := estimateTokensWithPendingAssistant(session.GetHistory(0), baseResponse)
 
-			// Evaluate auto-compress trigger (token estimate on user+assistant text,
-			// including this turn's assistant reply before it is appended to history).
-			if e.autoCompressEnabled && e.autoCompressMaxTokens > 0 {
-				estimate := contextEstimate
+			// Evaluate auto-compress trigger. Two threshold paths:
+			//   1. Legacy absolute override: autoCompressMaxTokens > 0
+			//   2. Percentage-of-window: effective_window × autoCompressThresholdPct
+			// The percentage path prefers the session's API-reported input_tokens
+			// (via ContextUsageReporter) over the rune-count heuristic, because
+			// the latter misses tool outputs and system prompt.
+			if e.autoCompressEnabled {
+				threshold, estimate := e.resolveAutoCompressThresholdAndEstimate(state, contextEstimate)
 				now := time.Now()
 				state.mu.Lock()
 				last := state.lastAutoCompressAt
 				state.mu.Unlock()
-				if estimate >= e.autoCompressMaxTokens && (last.IsZero() || now.Sub(last) >= e.autoCompressMinGap) {
+				if threshold > 0 && estimate >= threshold && (last.IsZero() || now.Sub(last) >= e.autoCompressMinGap) {
 					triggerAutoCompress = true
 					state.mu.Lock()
 					state.lastAutoCompressTokens = estimate
@@ -2931,7 +2996,14 @@ func (e *Engine) processInteractiveEvents(state *interactiveState, session *Sess
 
 			if e.showContextIndicator {
 				if sdkPlausible {
-					cleanResponse += contextIndicator(event.InputTokens)
+					// Prefer session's real context window over the generic default.
+					win := 0
+					if reporter, ok := state.agentSession.(ContextUsageReporter); ok {
+						if cu := reporter.GetContextUsage(); cu != nil {
+							win = cu.ContextWindow
+						}
+					}
+					cleanResponse += contextIndicator(event.InputTokens, win)
 				} else if selfPct > 0 {
 					cleanResponse += fmt.Sprintf("\n[ctx: ~%d%%]", selfPct)
 				}
@@ -11251,14 +11323,23 @@ func gitClone(repoURL, dest string) error {
 
 // ── Context usage indicator ──────────────────────────────────
 
-const modelContextWindow = 200_000 // generic fallback window for heuristic context estimates
+// defaultDisplayContextWindow is the fallback denominator when the session
+// does not expose a real ContextWindow via ContextUsageReporter. Chosen to
+// match the most common Claude model (200k) — better than the 0-means-100%
+// case and calibrates to the current Anthropic lineup.
+const defaultDisplayContextWindow = 200_000
 
-// contextIndicator returns a suffix like "\n[ctx: ~42%]" based on SDK-reported input tokens.
-func contextIndicator(inputTokens int) string {
+// contextIndicator returns a suffix like "\n[ctx: ~42%]" based on SDK-reported
+// input tokens. Uses the session's real context window when available,
+// falling back to the generic default otherwise.
+func contextIndicator(inputTokens int, window int) string {
 	if inputTokens <= 0 {
 		return ""
 	}
-	pct := inputTokens * 100 / modelContextWindow
+	if window <= 0 {
+		window = defaultDisplayContextWindow
+	}
+	pct := inputTokens * 100 / window
 	if pct > 100 {
 		pct = 100
 	}

@@ -294,18 +294,80 @@ func (a *Agent) configuredModels() []core.ModelOption {
 	return core.GetProviderModels(a.providers, a.activeIdx)
 }
 
+// defaultContextWindows is a built-in fallback lookup when the user hasn't
+// configured ContextWindow on a model and the API didn't report one.
+// Keep this map up to date with Anthropic's current model lineup. Matching
+// is exact (by Name or Alias), not substring — substring matching was
+// flagged as fragile (architect review).
+var defaultContextWindows = map[string]int{
+	// Aliases
+	"opus":   200_000,
+	"sonnet": 200_000,
+	"haiku":  200_000,
+	// Full model IDs — 200k variants
+	"claude-opus-4-6":   200_000,
+	"claude-sonnet-4-6": 200_000,
+	"claude-haiku-4-5":  200_000,
+	// Anthropic's [1m] suffix convention indicates extended context.
+	// If this convention changes, update this map; do not fall back to
+	// substring matching.
+	"claude-opus-4-6[1m]":   1_000_000,
+	"claude-sonnet-4-6[1m]": 1_000_000,
+}
+
+// defaultContextWindow returns the built-in fallback window for a model name
+// or alias. Returns 0 when unknown — callers should fall back to a conservative
+// default.
+func defaultContextWindow(modelName string) int {
+	if w, ok := defaultContextWindows[modelName]; ok {
+		return w
+	}
+	return 0
+}
+
 func (a *Agent) AvailableModels(ctx context.Context) []core.ModelOption {
-	if models := a.configuredModels(); len(models) > 0 {
+	enrich := func(models []core.ModelOption) []core.ModelOption {
+		// Fill in ContextWindow from built-in table where not already set.
+		for i := range models {
+			if models[i].ContextWindow == 0 {
+				if w := defaultContextWindow(models[i].Name); w > 0 {
+					models[i].ContextWindow = w
+				} else if w := defaultContextWindow(models[i].Alias); w > 0 {
+					models[i].ContextWindow = w
+				}
+			}
+		}
 		return models
+	}
+	if models := a.configuredModels(); len(models) > 0 {
+		return enrich(models)
 	}
 	if models := a.fetchModelsFromAPI(ctx); len(models) > 0 {
-		return models
+		return enrich(models)
 	}
-	return []core.ModelOption{
+	return enrich([]core.ModelOption{
 		{Name: "sonnet", Desc: "Claude Sonnet 4 (balanced)"},
 		{Name: "opus", Desc: "Claude Opus 4 (most capable)"},
 		{Name: "haiku", Desc: "Claude Haiku 3.5 (fastest)"},
+	})
+}
+
+// contextWindowFor returns the best-known static context window for the given
+// model name or alias. Priority: configured ModelOption.ContextWindow →
+// built-in default map → 0 (unknown).
+func (a *Agent) contextWindowFor(modelName string) int {
+	a.mu.RLock()
+	models := core.GetProviderModels(a.providers, a.activeIdx)
+	a.mu.RUnlock()
+	for _, m := range models {
+		if m.Name == modelName || m.Alias == modelName {
+			if m.ContextWindow > 0 {
+				return m.ContextWindow
+			}
+			break
+		}
 	}
+	return defaultContextWindow(modelName)
 }
 
 func (a *Agent) fetchModelsFromAPI(ctx context.Context) []core.ModelOption {
@@ -417,7 +479,16 @@ func (a *Agent) StartSessionWithOptions(ctx context.Context, sessionID string, o
 	disableVerbose := a.routerURL != ""
 	a.mu.Unlock()
 
-	return newClaudeSession(ctx, a.workDir, a.cliBin, a.cliExtraArgs, a.cliArgsFlag, model, effort, sessionID, a.mode, tools, disTools, extraEnv, platformPrompt, disableVerbose, a.spawnOpts, maxTok)
+	cs, err := newClaudeSession(ctx, a.workDir, a.cliBin, a.cliExtraArgs, a.cliArgsFlag, model, effort, sessionID, a.mode, tools, disTools, extraEnv, platformPrompt, disableVerbose, a.spawnOpts, maxTok)
+	if err != nil {
+		return nil, err
+	}
+	// Resolve the effective model's static context window and attach to the
+	// session. This becomes the denominator for auto-compact trigger and the
+	// display badge. Falls back to 0 (unknown) — callers use a conservative
+	// default in that case.
+	cs.contextWindow = a.contextWindowFor(model)
+	return cs, nil
 }
 
 func (a *Agent) ListSessions(ctx context.Context) ([]core.AgentSessionInfo, error) {

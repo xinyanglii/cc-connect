@@ -509,3 +509,40 @@ func TestStartSessionWithOptions_ModelOverride(t *testing.T) {
 		t.Errorf("Model override → %q, want %q", got, "opus")
 	}
 }
+
+func TestDefaultContextWindow(t *testing.T) {
+	tests := []struct {
+		model string
+		want  int
+	}{
+		{"opus", 200_000},
+		{"sonnet", 200_000},
+		{"haiku", 200_000},
+		{"claude-opus-4-6", 200_000},
+		{"claude-opus-4-6[1m]", 1_000_000},
+		{"claude-sonnet-4-6[1m]", 1_000_000},
+		{"unknown-model", 0},
+		{"", 0},
+	}
+	for _, tc := range tests {
+		t.Run(tc.model, func(t *testing.T) {
+			if got := defaultContextWindow(tc.model); got != tc.want {
+				t.Errorf("defaultContextWindow(%q) = %d, want %d", tc.model, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestAgentContextWindowFor(t *testing.T) {
+	// No configured models → fall through to built-in map
+	a := &Agent{}
+	if got := a.contextWindowFor("opus"); got != 200_000 {
+		t.Errorf("contextWindowFor(opus) = %d, want 200_000", got)
+	}
+	if got := a.contextWindowFor("claude-opus-4-6[1m]"); got != 1_000_000 {
+		t.Errorf("contextWindowFor(1m variant) = %d, want 1_000_000", got)
+	}
+	if got := a.contextWindowFor("nonexistent"); got != 0 {
+		t.Errorf("contextWindowFor(unknown) = %d, want 0", got)
+	}
+}
