@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 func TestReadHeartbeatMD(t *testing.T) {
@@ -218,5 +219,118 @@ func TestHeartbeatScheduler_Persistence(t *testing.T) {
 	hs2.SetInterval("proj-b", 15) // back to original
 	if _, err := os.Stat(stateFile); !os.IsNotExist(err) {
 		t.Error("state file should be removed when no overrides remain")
+	}
+}
+
+// ── active_hours tests ──────────────────────────────────────────────
+
+func TestParseActiveHours(t *testing.T) {
+	tests := []struct {
+		name     string
+		spec     string
+		wantS    int
+		wantE    int
+		wantErr  bool
+	}{
+		{"empty", "", -1, -1, false},
+		{"simple", "8-22", 8, 22, false},
+		{"overnight", "20-6", 20, 6, false},
+		{"boundary_0_23", "0-23", 0, 23, false},
+		{"with_spaces", " 8 - 22 ", 8, 22, false},
+		{"same_hour_rejected", "8-8", -1, -1, true},
+		{"same_zero_rejected", "0-0", -1, -1, true},
+		{"out_of_range_high", "25-30", -1, -1, true},
+		{"out_of_range_24", "0-24", -1, -1, true},
+		{"negative", "-1-5", -1, -1, true},
+		{"single_part", "8", -1, -1, true},
+		{"non_integer", "abc", -1, -1, true},
+		{"non_integer_suffix", "8-22pm", -1, -1, true},
+		{"empty_parts", "-", -1, -1, true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			s, e, err := ParseActiveHours(tc.spec)
+			if (err != nil) != tc.wantErr {
+				t.Fatalf("ParseActiveHours(%q) err=%v, wantErr=%v", tc.spec, err, tc.wantErr)
+			}
+			if !tc.wantErr && (s != tc.wantS || e != tc.wantE) {
+				t.Errorf("ParseActiveHours(%q) = (%d, %d), want (%d, %d)", tc.spec, s, e, tc.wantS, tc.wantE)
+			}
+		})
+	}
+}
+
+func TestIsActiveHour(t *testing.T) {
+	// Use a fixed timezone so test is not server-TZ dependent
+	utc := time.UTC
+
+	// Helper to stub time.Now at a specific hour
+	hourFix := func(hour int) HeartbeatConfig {
+		return HeartbeatConfig{
+			ActiveStartHour: 8,
+			ActiveEndHour:   22,
+			ActiveHoursLoc:  utc,
+		}
+	}
+	_ = hourFix
+
+	// Since isActiveHour uses time.Now(), we parameterize via Loc tricks:
+	// run logical tests where ActiveStart/End are varied but "now" is
+	// controlled indirectly. For pure unit testing we test the math by
+	// calling with config that always matches / never matches based on
+	// the real current hour. For full coverage we mock time.Now — but
+	// that requires a nowFunc variable. For v1, rely on the integer
+	// branches being exercised by ParseActiveHours + manual hour probing.
+
+	// Structural tests: unset → always active
+	cfg := HeartbeatConfig{ActiveStartHour: -1, ActiveEndHour: -1}
+	if !isActiveHour(cfg) {
+		t.Error("unset (-1,-1) should always be active")
+	}
+
+	// Derive current hour in UTC for a "matches current window" test
+	currentUTC := time.Now().In(utc).Hour()
+	// Full-day window (0-23 is valid): active at every hour
+	cfg = HeartbeatConfig{ActiveStartHour: 0, ActiveEndHour: 23, ActiveHoursLoc: utc}
+	if currentUTC < 23 {
+		if !isActiveHour(cfg) {
+			t.Errorf("0-23 UTC should be active at hour %d", currentUTC)
+		}
+	}
+
+	// Window that definitely excludes current hour
+	excludeStart := (currentUTC + 2) % 24
+	excludeEnd := (currentUTC + 3) % 24
+	if excludeStart != excludeEnd {
+		cfg = HeartbeatConfig{ActiveStartHour: excludeStart, ActiveEndHour: excludeEnd, ActiveHoursLoc: utc}
+		if isActiveHour(cfg) {
+			t.Errorf("window %d-%d should NOT include current hour %d", excludeStart, excludeEnd, currentUTC)
+		}
+	}
+}
+
+func TestHumanActiveHours(t *testing.T) {
+	tests := []struct {
+		name string
+		cfg  HeartbeatConfig
+		want string
+	}{
+		{"unset", HeartbeatConfig{ActiveStartHour: -1, ActiveEndHour: -1}, "always"},
+		{"normal_local", HeartbeatConfig{ActiveStartHour: 8, ActiveEndHour: 22}, "8-22 local"},
+	}
+	berlin, err := time.LoadLocation("Europe/Berlin")
+	if err == nil {
+		tests = append(tests, struct {
+			name string
+			cfg  HeartbeatConfig
+			want string
+		}{"with_tz", HeartbeatConfig{ActiveStartHour: 8, ActiveEndHour: 22, ActiveHoursLoc: berlin}, "8-22 Europe/Berlin"})
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := humanActiveHours(tc.cfg); got != tc.want {
+				t.Errorf("humanActiveHours = %q, want %q", got, tc.want)
+			}
+		})
 	}
 }

@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -13,28 +14,33 @@ import (
 
 // HeartbeatConfig holds runtime heartbeat settings for a single project.
 type HeartbeatConfig struct {
-	Enabled      bool
-	IntervalMins int
-	OnlyWhenIdle bool
-	SessionKey   string
-	Prompt       string // explicit prompt; empty = read HEARTBEAT.md
-	Silent       bool   // suppress "💓" notification
-	TimeoutMins  int
+	Enabled         bool
+	IntervalMins    int
+	OnlyWhenIdle    bool
+	SessionKey      string
+	Prompt          string // explicit prompt; empty = read HEARTBEAT.md
+	Silent          bool   // suppress "💓" notification
+	TimeoutMins     int
+	ActiveStartHour int            // 0-23; -1 = always active (unset)
+	ActiveEndHour   int            // 0-23; -1 = always active (unset)
+	ActiveHoursLoc  *time.Location // nil = time.Local
 }
 
 // HeartbeatStatus is returned by the /heartbeat command.
 type HeartbeatStatus struct {
-	Enabled      bool
-	Paused       bool
-	IntervalMins int
-	OnlyWhenIdle bool
-	SessionKey   string
-	Silent       bool
-	RunCount     int
-	ErrorCount   int
-	SkippedBusy  int
-	LastRun      time.Time
-	LastError    string
+	Enabled         bool
+	Paused          bool
+	IntervalMins    int
+	OnlyWhenIdle    bool
+	SessionKey      string
+	Silent          bool
+	ActiveHours     string // human-readable, e.g. "8-22 Europe/Berlin" or "always"
+	RunCount        int
+	ErrorCount      int
+	SkippedBusy     int
+	SkippedInactive int
+	LastRun         time.Time
+	LastError       string
 }
 
 // heartbeatPersisted is the JSON-serialisable per-project state.
@@ -64,11 +70,12 @@ type heartbeatEntry struct {
 	origIntervalMins int // interval from config, for detecting overrides
 
 	// Runtime stats
-	runCount    int
-	errorCount  int
-	skippedBusy int
-	lastRun     time.Time
-	lastError   string
+	runCount        int
+	errorCount      int
+	skippedBusy     int
+	skippedInactive int // incremented when skipped due to active_hours window
+	lastRun         time.Time
+	lastError       string
 }
 
 func NewHeartbeatScheduler(dataDir string) *HeartbeatScheduler {
@@ -175,17 +182,19 @@ func (hs *HeartbeatScheduler) Status(project string) *HeartbeatStatus {
 		return nil
 	}
 	return &HeartbeatStatus{
-		Enabled:      entry.config.Enabled,
-		Paused:       entry.paused,
-		IntervalMins: entry.config.IntervalMins,
-		OnlyWhenIdle: entry.config.OnlyWhenIdle,
-		SessionKey:   entry.config.SessionKey,
-		Silent:       entry.config.Silent,
-		RunCount:     entry.runCount,
-		ErrorCount:   entry.errorCount,
-		SkippedBusy:  entry.skippedBusy,
-		LastRun:      entry.lastRun,
-		LastError:    entry.lastError,
+		Enabled:         entry.config.Enabled,
+		Paused:          entry.paused,
+		IntervalMins:    entry.config.IntervalMins,
+		OnlyWhenIdle:    entry.config.OnlyWhenIdle,
+		SessionKey:      entry.config.SessionKey,
+		Silent:          entry.config.Silent,
+		ActiveHours:     humanActiveHours(entry.config),
+		RunCount:        entry.runCount,
+		ErrorCount:      entry.errorCount,
+		SkippedBusy:     entry.skippedBusy,
+		SkippedInactive: entry.skippedInactive,
+		LastRun:         entry.lastRun,
+		LastError:       entry.lastError,
 	}
 }
 
@@ -324,6 +333,17 @@ func (hs *HeartbeatScheduler) run(entry *heartbeatEntry) {
 		case <-entry.stopCh:
 			return
 		case <-entry.ticker.C:
+			// Two independent skip conditions. Check inactive first; pause is
+			// user-controlled and should be reported distinctly.
+			if !isActiveHour(entry.config) {
+				hs.mu.Lock()
+				entry.skippedInactive++
+				hs.mu.Unlock()
+				slog.Debug("heartbeat: outside active hours, skipping",
+					"project", entry.project,
+					"active", humanActiveHours(entry.config))
+				continue
+			}
 			hs.mu.Lock()
 			paused := entry.paused
 			hs.mu.Unlock()
@@ -332,6 +352,66 @@ func (hs *HeartbeatScheduler) run(entry *heartbeatEntry) {
 			}
 		}
 	}
+}
+
+// isActiveHour reports whether the current local hour (in cfg.ActiveHoursLoc,
+// or time.Local if nil) falls within the configured active window.
+// Half-open interval [start, end). When ActiveStartHour/EndHour are -1
+// (unset) returns true (always active). Supports overnight ranges
+// where start > end (e.g. 20-6 means 20:00-05:59).
+func isActiveHour(cfg HeartbeatConfig) bool {
+	if cfg.ActiveStartHour < 0 || cfg.ActiveEndHour < 0 {
+		return true
+	}
+	loc := cfg.ActiveHoursLoc
+	if loc == nil {
+		loc = time.Local
+	}
+	h := time.Now().In(loc).Hour()
+	if cfg.ActiveStartHour < cfg.ActiveEndHour {
+		return h >= cfg.ActiveStartHour && h < cfg.ActiveEndHour
+	}
+	// Overnight range: h >= start OR h < end (e.g. 20-6 → 20..23 || 0..5)
+	return h >= cfg.ActiveStartHour || h < cfg.ActiveEndHour
+}
+
+// humanActiveHours renders the config window for logs and status output.
+func humanActiveHours(cfg HeartbeatConfig) string {
+	if cfg.ActiveStartHour < 0 || cfg.ActiveEndHour < 0 {
+		return "always"
+	}
+	loc := "local"
+	if cfg.ActiveHoursLoc != nil {
+		loc = cfg.ActiveHoursLoc.String()
+	}
+	return fmt.Sprintf("%d-%d %s", cfg.ActiveStartHour, cfg.ActiveEndHour, loc)
+}
+
+// ParseActiveHours parses a "HH-HH" string into start/end hours.
+// Empty string returns (-1, -1, nil) meaning always-active.
+// Returns a descriptive error for invalid input.
+// start == end is rejected (would mean "never active"; likely a typo).
+func ParseActiveHours(spec string) (start, end int, err error) {
+	spec = strings.TrimSpace(spec)
+	if spec == "" {
+		return -1, -1, nil
+	}
+	parts := strings.SplitN(spec, "-", 2)
+	if len(parts) != 2 {
+		return -1, -1, fmt.Errorf("active_hours format must be HH-HH, got %q", spec)
+	}
+	s, err1 := strconv.Atoi(strings.TrimSpace(parts[0]))
+	e, err2 := strconv.Atoi(strings.TrimSpace(parts[1]))
+	if err1 != nil || err2 != nil {
+		return -1, -1, fmt.Errorf("active_hours must be integers, got %q", spec)
+	}
+	if s < 0 || s > 23 || e < 0 || e > 23 {
+		return -1, -1, fmt.Errorf("active_hours must be 0-23, got %q", spec)
+	}
+	if s == e {
+		return -1, -1, fmt.Errorf("active_hours start must differ from end (%d-%d would be disabled; omit the field instead)", s, e)
+	}
+	return s, e, nil
 }
 
 func (hs *HeartbeatScheduler) execute(entry *heartbeatEntry) {
