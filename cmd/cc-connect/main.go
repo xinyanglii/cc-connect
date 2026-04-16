@@ -683,7 +683,11 @@ func main() {
 	// Start heartbeat scheduler
 	heartbeatSched := core.NewHeartbeatScheduler(cfg.DataDir)
 	for i, proj := range cfg.Projects {
-		hbCfg := buildHeartbeatConfig(proj.Heartbeat)
+		hbCfg, err := buildHeartbeatConfig(proj.Heartbeat)
+		if err != nil {
+			slog.Error("invalid heartbeat config; aborting startup", "project", proj.Name, "error", err)
+			os.Exit(1)
+		}
 		if hbCfg.Enabled {
 			heartbeatSched.Register(proj.Name, hbCfg, engines[i], effectiveWorkDirs[i])
 		}
@@ -1488,14 +1492,16 @@ func convertCoreModels(ms []core.ModelOption) []config.ProviderModelConfig {
 	return out
 }
 
-func buildHeartbeatConfig(hc config.HeartbeatConfig) core.HeartbeatConfig {
+func buildHeartbeatConfig(hc config.HeartbeatConfig) (core.HeartbeatConfig, error) {
 	cfg := core.HeartbeatConfig{
-		IntervalMins: 30,
-		OnlyWhenIdle: true,
-		Silent:       true,
-		TimeoutMins:  30,
-		SessionKey:   hc.SessionKey,
-		Prompt:       hc.Prompt,
+		IntervalMins:    30,
+		OnlyWhenIdle:    true,
+		Silent:          true,
+		TimeoutMins:     30,
+		SessionKey:      hc.SessionKey,
+		Prompt:          hc.Prompt,
+		ActiveStartHour: -1,
+		ActiveEndHour:   -1,
 	}
 	if hc.Enabled != nil {
 		cfg.Enabled = *hc.Enabled
@@ -1512,7 +1518,28 @@ func buildHeartbeatConfig(hc config.HeartbeatConfig) core.HeartbeatConfig {
 	if hc.TimeoutMins != nil {
 		cfg.TimeoutMins = *hc.TimeoutMins
 	}
-	return cfg
+	if hc.ActiveHours != "" {
+		start, end, err := core.ParseActiveHours(hc.ActiveHours)
+		if err != nil {
+			return cfg, err
+		}
+		cfg.ActiveStartHour = start
+		cfg.ActiveEndHour = end
+	}
+	if hc.ActiveHoursTZ != "" {
+		loc, err := time.LoadLocation(hc.ActiveHoursTZ)
+		if err != nil {
+			return cfg, fmt.Errorf("invalid active_hours_tz %q: %w", hc.ActiveHoursTZ, err)
+		}
+		cfg.ActiveHoursLoc = loc
+	} else if hc.ActiveHours != "" {
+		// User set active_hours without explicit TZ — warn to prevent
+		// systemd UTC surprises (critic finding).
+		slog.Warn("heartbeat: active_hours set without active_hours_tz; using server local TZ",
+			"tz", time.Local.String(),
+			"hint", "set active_hours_tz to an IANA name (e.g. \"Europe/Berlin\") for deterministic behavior")
+	}
+	return cfg, nil
 }
 
 func derefInt(v *int) int {
