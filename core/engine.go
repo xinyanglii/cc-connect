@@ -4215,9 +4215,20 @@ func (e *Engine) cmdSwitch(p Platform, msg *Message, args []string) {
 		e.reply(p, msg.ReplyCtx, e.i18n.Tf(MsgError, err))
 		return
 	}
-	agentSessions = filterOwnedSessions(agentSessions, sessions.KnownAgentSessionIDs())
 
-	matched := e.matchSession(agentSessions, sessions, query)
+	// Full session-ID match bypasses the ownership filter so users can
+	// recover an orphaned session by pasting its full UUID.
+	var matched *AgentSessionInfo
+	for i := range agentSessions {
+		if agentSessions[i].ID == query {
+			matched = &agentSessions[i]
+			break
+		}
+	}
+	if matched == nil {
+		owned := filterOwnedSessions(agentSessions, sessions.KnownAgentSessionIDs())
+		matched = e.matchSession(owned, sessions, query)
+	}
 	if matched == nil {
 		e.reply(p, msg.ReplyCtx, fmt.Sprintf(e.i18n.T(MsgSwitchNoMatch), query))
 		return
@@ -6180,10 +6191,10 @@ func (e *Engine) cmdModel(p Platform, msg *Message, args []string) {
 		return
 	}
 	e.cleanupInteractiveState(interactiveKey)
-
-	s := sessions.GetOrCreateActive(msg.SessionKey)
-	s.SetAgentSessionID("", "")
-	s.ClearHistory()
+	// Preserve AgentSessionID across model switch — claude CLI supports
+	// `--resume <id> --model <new>`, so the same session continues with the
+	// new model. Clearing it would detach the session from cc-connect's
+	// known set, hiding it from /list and breaking /switch <name> lookups.
 	sessions.Save()
 
 	e.reply(p, msg.ReplyCtx, e.i18n.Tf(MsgModelChanged, target))
@@ -7694,9 +7705,9 @@ func (e *Engine) handleModelCardAction(args, sessionKey string) *Card {
 	resolved, err := e.switchModelOnAgent(agent, target, agent == e.agent)
 	e.cleanupInteractiveState(e.interactiveKeyForSessionKey(sessionKey))
 	if err == nil {
-		s := sessions.GetOrCreateActive(sessionKey)
-		s.SetAgentSessionID("", "")
-		s.ClearHistory()
+		// Preserve AgentSessionID across model switch — claude CLI supports
+		// `--resume <id> --model <new>`, so the same session continues with
+		// the new model. Same reasoning as cmdModel / performModelSwitchAsync.
 		sessions.Save()
 	}
 
@@ -8203,9 +8214,10 @@ func (e *Engine) pushDeleteModeResultCard(sessionKey string) {
 func (e *Engine) performModelSwitchAsync(sessionKey string, state *interactiveState, agent Agent, sessions *SessionManager, target string) {
 	resolved, err := e.switchModelOnAgent(agent, target, agent == e.agent)
 	if err == nil {
-		s := sessions.GetOrCreateActive(sessionKey)
-		s.SetAgentSessionID("", "")
-		s.ClearHistory()
+		// Preserve AgentSessionID across model switch — claude CLI supports
+		// `--resume <id> --model <new>`, so the same session continues with the
+		// new model. Same reasoning as cmdModel; covers the interactive
+		// /model card path here.
 		sessions.Save()
 	}
 

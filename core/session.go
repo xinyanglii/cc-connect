@@ -366,6 +366,12 @@ func (sm *SessionManager) AllSessions() []*Session {
 // KnownAgentSessionIDs returns the set of agent session IDs tracked by cc-connect.
 // This is used to filter agent.ListSessions() output to only sessions owned by
 // cc-connect, excluding sessions created by external CLI usage in the same work_dir.
+//
+// Includes IDs from two sources so a session that was once owned (e.g. /name'd)
+// remains visible even if the in-memory Session object later drops its
+// AgentSessionID (e.g. after /model reset):
+//  1. Live Session.AgentSessionID values
+//  2. Keys of sessionNames (every /name'd agent session)
 func (sm *SessionManager) KnownAgentSessionIDs() map[string]struct{} {
 	sm.mu.RLock()
 	defer sm.mu.RUnlock()
@@ -374,6 +380,11 @@ func (sm *SessionManager) KnownAgentSessionIDs() map[string]struct{} {
 		s.mu.Lock()
 		aid := s.AgentSessionID
 		s.mu.Unlock()
+		if aid != "" {
+			ids[aid] = struct{}{}
+		}
+	}
+	for aid := range sm.sessionNames {
 		if aid != "" {
 			ids[aid] = struct{}{}
 		}

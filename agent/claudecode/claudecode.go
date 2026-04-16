@@ -313,15 +313,18 @@ var defaultContextWindows = map[string]int{
 	"opus":   200_000,
 	"sonnet": 200_000,
 	"haiku":  200_000,
-	// Full model IDs — 200k variants
+	// Full model IDs — 200k variants (default without [1m] suffix)
 	"claude-opus-4-6":   200_000,
 	"claude-sonnet-4-6": 200_000,
 	"claude-haiku-4-5":  200_000,
+	"claude-opus-4-7":   200_000,
 	// Anthropic's [1m] suffix convention indicates extended context.
-	// If this convention changes, update this map; do not fall back to
-	// substring matching.
+	// Verified 2026-04-16 via TUI /context: plain `claude-opus-4-7` reports
+	// 200k; must use `[1m]` suffix for 1M. If this convention changes,
+	// update this map; do not fall back to substring matching.
 	"claude-opus-4-6[1m]":   1_000_000,
 	"claude-sonnet-4-6[1m]": 1_000_000,
+	"claude-opus-4-7[1m]":   1_000_000,
 }
 
 // defaultContextWindow returns the built-in fallback window for a model name
@@ -358,6 +361,8 @@ func (a *Agent) AvailableModels(ctx context.Context) []core.ModelOption {
 		{Name: "sonnet", Desc: "Claude Sonnet 4 (balanced)"},
 		{Name: "opus", Desc: "Claude Opus 4 (most capable)"},
 		{Name: "haiku", Desc: "Claude Haiku 3.5 (fastest)"},
+		{Name: "claude-opus-4-7[1m]", Desc: "Opus 4.7 (1M context)"},
+		{Name: "claude-sonnet-4-6[1m]", Desc: "Sonnet 4.6 (1M context)"},
 	})
 }
 
