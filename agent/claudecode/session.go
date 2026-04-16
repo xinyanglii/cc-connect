@@ -570,6 +570,29 @@ func (cs *claudeSession) handleControlRequest(raw map[string]any) {
 	toolName, _ := request["tool_name"].(string)
 	input, _ := request["input"].(map[string]any)
 
+	// AskUserQuestion is special: its whole purpose is to ask the user.
+	// Auto-approving it (yolo/bypassPermissions) defeats the tool — it
+	// returns with no answer and the agent proceeds without the input it
+	// needed. Always route to the card-based question UI regardless of
+	// auto-approve state. dontAsk deliberately still denies (user wants
+	// zero interaction).
+	if toolName == "AskUserQuestion" && !cs.dontAsk.Load() {
+		slog.Info("claudeSession: AskUserQuestion (bypassing auto-approve)", "request_id", requestID)
+		evt := core.Event{
+			Type:         core.EventPermissionRequest,
+			RequestID:    requestID,
+			ToolName:     toolName,
+			ToolInput:    summarizeInput(toolName, input),
+			ToolInputRaw: input,
+			Questions:    parseUserQuestions(input),
+		}
+		select {
+		case cs.events <- evt:
+		case <-cs.ctx.Done():
+		}
+		return
+	}
+
 	if cs.autoApprove.Load() {
 		slog.Debug("claudeSession: auto-approving", "request_id", requestID, "tool", toolName)
 		_ = cs.RespondPermission(requestID, core.PermissionResult{
