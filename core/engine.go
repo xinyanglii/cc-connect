@@ -973,13 +973,14 @@ func (e *Engine) ExecuteCronJob(job *CronJob) error {
 	}
 
 	msg := &Message{
-		SessionKey:   sessionKey,
-		Platform:     platformName,
-		UserID:       "cron",
-		UserName:     "cron",
-		Content:      job.Prompt,
-		ReplyCtx:     replyCtx,
-		ModeOverride: job.Mode,
+		SessionKey:    sessionKey,
+		Platform:      platformName,
+		UserID:        "cron",
+		UserName:      "cron",
+		Content:       job.Prompt,
+		ReplyCtx:      replyCtx,
+		ModeOverride:  job.Mode,
+		ModelOverride: job.Model, // only honored when this cron runs new_per_run (validated at AddJob)
 	}
 
 	// Resolve workspace-specific agent and sessions for multi-workspace mode.
@@ -2017,7 +2018,10 @@ func (e *Engine) processInteractiveMessageWith(p Platform, msg *Message, session
 	if agent != e.agent {
 		agentOverride = agent
 	}
-	state := e.getOrCreateInteractiveStateWith(interactiveKey, p, msg.ReplyCtx, session, sessions, agentOverride, ccSessionKey)
+	// Per-message session override (only effective when we're spawning a
+	// fresh subprocess; reuse paths ignore it because --model is launch-time).
+	opts := AgentSessionOptions{Model: msg.ModelOverride}
+	state := e.getOrCreateInteractiveStateWith(interactiveKey, p, msg.ReplyCtx, session, sessions, agentOverride, ccSessionKey, opts)
 
 	// Set workspaceDir on the state for idle reaper identification
 	if workspaceDir != "" {
@@ -2239,7 +2243,7 @@ func adoptPendingFromPlaceholder(existing, newState *interactiveState) {
 
 // When agentOverride is non-nil it is used instead of e.agent to start the session.
 // ccSessionKey, when non-empty, is used for CC_SESSION_KEY env injection; otherwise sessionKey is used.
-func (e *Engine) getOrCreateInteractiveStateWith(sessionKey string, p Platform, replyCtx any, session *Session, sessions *SessionManager, agentOverride Agent, ccSessionKey string) *interactiveState {
+func (e *Engine) getOrCreateInteractiveStateWith(sessionKey string, p Platform, replyCtx any, session *Session, sessions *SessionManager, agentOverride Agent, ccSessionKey string, opts AgentSessionOptions) *interactiveState {
 	e.interactiveMu.Lock()
 	defer e.interactiveMu.Unlock()
 
@@ -2329,7 +2333,19 @@ func (e *Engine) getOrCreateInteractiveStateWith(sessionKey string, p Platform, 
 	startSessionID := session.GetAgentSessionID()
 	isResume := startSessionID != ""
 	startAt := time.Now()
-	agentSession, err := agent.StartSession(e.ctx, startSessionID)
+	// If opts carries overrides (model, etc), route through AgentWithOptions
+	// when the agent supports it. For unsupported agents with a requested
+	// override, this is a hard error (refuse to silently drop the request).
+	startSession := func(sid string) (AgentSession, error) {
+		if opts.Model == "" {
+			return agent.StartSession(e.ctx, sid)
+		}
+		if withOpts, ok := agent.(AgentWithOptions); ok {
+			return withOpts.StartSessionWithOptions(e.ctx, sid, opts)
+		}
+		return nil, fmt.Errorf("agent %T does not support per-session model override (requested model=%q)", agent, opts.Model)
+	}
+	agentSession, err := startSession(startSessionID)
 	startElapsed := time.Since(startAt)
 	if err != nil {
 		// If resume/continue failed, try a fresh session as fallback.
@@ -2338,7 +2354,7 @@ func (e *Engine) getOrCreateInteractiveStateWith(sessionKey string, p Platform, 
 				"session_key", sessionKey, "failed_session_id", startSessionID,
 				"error", err, "elapsed", startElapsed)
 			startAt = time.Now()
-			agentSession, err = agent.StartSession(e.ctx, "")
+			agentSession, err = startSession("")
 			startElapsed = time.Since(startAt)
 			if err == nil {
 				slog.Info("fresh session started after resume failure",
@@ -8897,23 +8913,47 @@ func (e *Engine) cmdCron(p Platform, msg *Message, args []string) {
 }
 
 func (e *Engine) cmdCronAdd(p Platform, msg *Message, args []string) {
-	// /cron add <min> <hour> <day> <month> <weekday> <prompt...>
-	if len(args) < 6 {
+	// /cron add [--session-mode new-per-run] [--model <name>] <min> <hour> <day> <month> <weekday> <prompt...>
+	//
+	// Strips optional --flag <value> pairs from the head of args before
+	// interpreting the remaining 5 positional cron fields + prompt.
+	var sessionMode, model string
+	positional := make([]string, 0, len(args))
+	for i := 0; i < len(args); i++ {
+		tok := args[i]
+		if strings.HasPrefix(tok, "--") && i+1 < len(args) {
+			switch tok {
+			case "--session-mode":
+				sessionMode = args[i+1]
+				i++
+				continue
+			case "--model":
+				model = args[i+1]
+				i++
+				continue
+			}
+		}
+		positional = append(positional, tok)
+	}
+
+	if len(positional) < 6 {
 		e.reply(p, msg.ReplyCtx, e.i18n.T(MsgCronAddUsage))
 		return
 	}
 
-	cronExpr := strings.Join(args[:5], " ")
-	prompt := strings.Join(args[5:], " ")
+	cronExpr := strings.Join(positional[:5], " ")
+	prompt := strings.Join(positional[5:], " ")
 
 	job := &CronJob{
-		ID:         GenerateCronID(),
-		Project:    e.name,
-		SessionKey: msg.SessionKey,
-		CronExpr:   cronExpr,
-		Prompt:     prompt,
-		Enabled:    true,
-		CreatedAt:  time.Now(),
+		ID:          GenerateCronID(),
+		Project:     e.name,
+		SessionKey:  msg.SessionKey,
+		CronExpr:    cronExpr,
+		Prompt:      prompt,
+		Enabled:     true,
+		SessionMode: sessionMode,
+		Model:       model,
+		CreatedAt:   time.Now(),
 	}
 
 	if err := e.cronScheduler.AddJob(job); err != nil {

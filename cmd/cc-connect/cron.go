@@ -40,7 +40,7 @@ func runCron(args []string) {
 }
 
 func runCronAdd(args []string) {
-	var project, sessionKey, cronExpr, prompt, execCmd, desc, dataDir, sessionMode string
+	var project, sessionKey, cronExpr, prompt, execCmd, desc, dataDir, sessionMode, model string
 	var timeoutMins *int
 
 	var positional []string
@@ -85,6 +85,11 @@ func runCronAdd(args []string) {
 			if i+1 < len(args) {
 				i++
 				sessionMode = args[i]
+			}
+		case "--model":
+			if i+1 < len(args) {
+				i++
+				model = args[i]
 			}
 		case "--timeout-mins":
 			if i+1 < len(args) {
@@ -148,6 +153,9 @@ func runCronAdd(args []string) {
 	}
 	if sessionMode != "" {
 		body["session_mode"] = sessionMode
+	}
+	if model != "" {
+		body["model"] = model
 	}
 	if timeoutMins != nil {
 		body["timeout_mins"] = *timeoutMins

@@ -565,3 +565,46 @@ func TestCronStore_ListByProject(t *testing.T) {
 		t.Errorf("ListByProject(nonexistent) = %d jobs, want 0", len(list3))
 	}
 }
+
+// ── Model override validation ──────────────────────────────────────
+
+func TestValidateCronJob_ModelRequiresNewPerRun(t *testing.T) {
+	tests := []struct {
+		name        string
+		sessionMode string
+		model       string
+		wantErr     bool
+	}{
+		{"reuse_no_model", "", "", false},
+		{"reuse_with_model_rejected", "", "sonnet", true},
+		{"reuse_explicit_with_model_rejected", "reuse", "haiku", true},
+		{"new_per_run_underscore_ok", "new_per_run", "sonnet", false},
+		{"new_per_run_hyphen_ok", "new-per-run", "sonnet", false},
+		{"new_per_run_no_model", "new_per_run", "", false},
+		{"new_per_run_bad_model_ok_here", "new_per_run", "anything-goes", false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			j := &CronJob{
+				SessionMode: tc.sessionMode,
+				Model:       tc.model,
+			}
+			err := validateCronJob(j)
+			if (err != nil) != tc.wantErr {
+				t.Errorf("validateCronJob err=%v, wantErr=%v", err, tc.wantErr)
+			}
+		})
+	}
+}
+
+func TestValidateCronJob_ModelWithOtherErrors(t *testing.T) {
+	// Model + invalid session_mode: session_mode error should win (returned first).
+	j := &CronJob{
+		SessionMode: "bogus",
+		Model:       "sonnet",
+	}
+	err := validateCronJob(j)
+	if err == nil || !strings.Contains(err.Error(), "session_mode") {
+		t.Errorf("expected session_mode error first, got %v", err)
+	}
+}
