@@ -320,10 +320,10 @@ func (p *Platform) Start(handler core.MessageHandler) error {
 			return nil
 		}).
 		OnP2MessageReactionCreatedV1(func(ctx context.Context, event *larkim.P2MessageReactionCreatedV1) error {
-			return nil // ignore reaction events (triggered by our own addReaction)
+			return p.onReactionCreated(event)
 		}).
 		OnP2MessageReactionDeletedV1(func(ctx context.Context, event *larkim.P2MessageReactionDeletedV1) error {
-			return nil // ignore reaction removal events (triggered by our own removeReaction)
+			return nil // removal events are noise — only forward adds as feedback
 		}).
 		OnP2CardActionTrigger(func(ctx context.Context, event *callback.CardActionTriggerEvent) (*callback.CardActionTriggerResponse, error) {
 			return p.onCardAction(event)
@@ -437,6 +437,26 @@ func (p *Platform) onCardAction(event *callback.CardActionTriggerEvent) (*callba
 			actionVal = "act:/delete-mode form-submit"
 		case "delete_mode_cancel":
 			actionVal = "act:/delete-mode cancel"
+		case askqMultiSubmitName:
+			qIdx := 0
+			if v, ok := event.Event.Action.Value["askq_qidx"]; ok {
+				switch vv := v.(type) {
+				case float64:
+					qIdx = int(vv)
+				case int:
+					qIdx = vv
+				}
+			}
+			selected := collectAskqMultiSelected(event.Event.Action.FormValue, qIdx)
+			if len(selected) == 0 {
+				actionVal = fmt.Sprintf("askq_multi:%d:", qIdx)
+			} else {
+				parts := make([]string, len(selected))
+				for i, s := range selected {
+					parts[i] = strconv.Itoa(s)
+				}
+				actionVal = fmt.Sprintf("askq_multi:%d:%s", qIdx, strings.Join(parts, ","))
+			}
 		}
 	}
 	if actionVal == "act:/delete-mode form-submit" {
@@ -535,6 +555,28 @@ func (p *Platform) onCardAction(event *callback.CardActionTriggerEvent) (*callba
 		if permBody != "" {
 			cb.Markdown(permBody)
 		}
+		return &callback.CardActionTriggerResponse{
+			Card: &callback.Card{
+				Type: "raw",
+				Data: renderCardMap(cb.Build(), sessionKey),
+			},
+		}, nil
+	}
+
+	// askq_multi: — multi-select submit, forward selected indices as user msg
+	if strings.HasPrefix(actionVal, "askq_multi:") {
+		rctx := replyContext{messageID: messageID, chatID: chatID, sessionKey: sessionKey}
+		go p.handler(p.dispatchPlatform(), &core.Message{
+			SessionKey: sessionKey,
+			Platform:   p.platformName,
+			UserID:     userID,
+			UserName:   p.resolveUserName(userID),
+			ChatName:   p.resolveChatName(chatID),
+			Content:    actionVal,
+			ReplyCtx:   rctx,
+		})
+		cb := core.NewCard().Title("✅ 已提交", "green")
+		cb.Markdown("**已收到你的多选**")
 		return &callback.CardActionTriggerResponse{
 			Card: &callback.Card{
 				Type: "raw",
@@ -1790,12 +1832,112 @@ func (p *Platform) SendImage(ctx context.Context, rctx any, img core.ImageAttach
 		return fmt.Errorf("%s: upload image: no image_key returned", p.tag())
 	}
 
-	imageContent, err := (&larkim.MessageImage{ImageKey: *uploadResp.Data.ImageKey}).String()
+	imageKey := *uploadResp.Data.ImageKey
+
+	// Rich card path: embed image + metadata caption when streaming cards
+	// are enabled. Falls back silently to plain MsgTypeImage on failure
+	// (cardkit permissions missing, etc.).
+	if p.streamingCard {
+		if err := p.sendImagePreviewCard(ctx, rc, imageKey, img); err == nil {
+			return nil
+		}
+	}
+
+	imageContent, err := (&larkim.MessageImage{ImageKey: imageKey}).String()
 	if err != nil {
 		return fmt.Errorf("%s: build image message: %w", p.tag(), err)
 	}
 
 	return p.sendMediaMessage(ctx, rc, larkim.MsgTypeImage, imageContent)
+}
+
+// sendImagePreviewCard wraps the uploaded image in an interactive card
+// with a caption (filename, mime type, size). Clicking the image opens
+// Feishu's native full-screen preview; long-press saves/downloads.
+func (p *Platform) sendImagePreviewCard(ctx context.Context, rc replyContext, imageKey string, img core.ImageAttachment) error {
+	cardJSON := buildImagePreviewCardJSON(imageKey, img)
+	if p.shouldUseThreadOrReplyAPI(rc) {
+		req := larkim.NewReplyMessageReqBuilder().
+			MessageId(rc.messageID).
+			Body(p.buildReplyMessageReqBody(rc, larkim.MsgTypeInteractive, cardJSON)).
+			Build()
+		return p.withTransientRetry(ctx, "send image card (reply)", func() error {
+			return p.withFreshTenantAccessTokenRetry(ctx, "send image card (reply)", func(client *lark.Client, options ...larkcore.RequestOptionFunc) error {
+				resp, err := client.Im.Message.Reply(ctx, req, options...)
+				if err != nil {
+					return fmt.Errorf("%s: send image card: %w", p.tag(), err)
+				}
+				if !resp.Success() {
+					return fmt.Errorf("%s: send image card code=%d msg=%s", p.tag(), resp.Code, resp.Msg)
+				}
+				return nil
+			})
+		})
+	}
+	req := larkim.NewCreateMessageReqBuilder().
+		ReceiveIdType(larkim.ReceiveIdTypeChatId).
+		Body(larkim.NewCreateMessageReqBodyBuilder().
+			ReceiveId(rc.chatID).
+			MsgType(larkim.MsgTypeInteractive).
+			Content(cardJSON).
+			Build()).
+		Build()
+	return p.withTransientRetry(ctx, "send image card", func() error {
+		return p.withFreshTenantAccessTokenRetry(ctx, "send image card", func(client *lark.Client, options ...larkcore.RequestOptionFunc) error {
+			resp, err := client.Im.Message.Create(ctx, req, options...)
+			if err != nil {
+				return fmt.Errorf("%s: send image card: %w", p.tag(), err)
+			}
+			if !resp.Success() {
+				return fmt.Errorf("%s: send image card code=%d msg=%s", p.tag(), resp.Code, resp.Msg)
+			}
+			return nil
+		})
+	})
+}
+
+func buildImagePreviewCardJSON(imageKey string, img core.ImageAttachment) string {
+	filename := img.FileName
+	if filename == "" {
+		filename = "image"
+	}
+	meta := fmt.Sprintf("`%s`  ·  %s  ·  %s", filename, img.MimeType, humanSize(len(img.Data)))
+
+	card := map[string]any{
+		"schema": "2.0",
+		"config": map[string]any{"wide_screen_mode": true},
+		"body": map[string]any{
+			"elements": []any{
+				map[string]any{
+					"tag":           "img",
+					"img_key":       imageKey,
+					"alt":           map[string]any{"tag": "plain_text", "content": filename},
+					"mode":          "fit_horizontal",
+					"preview":       true,
+					"custom_width":  false,
+					"compact_width": false,
+				},
+				map[string]any{
+					"tag":      "note",
+					"elements": []map[string]any{{"tag": "lark_md", "content": meta}},
+				},
+			},
+		},
+	}
+	b, _ := json.Marshal(card)
+	return string(b)
+}
+
+// humanSize returns a short byte-count string like "1.2 MB" or "345 KB".
+func humanSize(n int) string {
+	switch {
+	case n >= 1<<20:
+		return fmt.Sprintf("%.1f MB", float64(n)/(1<<20))
+	case n >= 1<<10:
+		return fmt.Sprintf("%.1f KB", float64(n)/(1<<10))
+	default:
+		return fmt.Sprintf("%d B", n)
+	}
 }
 
 func (p *Platform) SendFile(ctx context.Context, rctx any, file core.FileAttachment) error {

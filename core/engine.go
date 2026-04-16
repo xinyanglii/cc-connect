@@ -2047,6 +2047,28 @@ func (e *Engine) handlePendingPermission(p Platform, msg *Message, content strin
 func (e *Engine) resolveAskQuestionAnswer(q UserQuestion, input string) string {
 	input = strings.TrimSpace(input)
 
+	// Handle multi-select form submit callback: "askq_multi:qIdx:1,3,5"
+	// (empty trailing CSV means user submitted with nothing checked).
+	if strings.HasPrefix(input, "askq_multi:") {
+		parts := strings.SplitN(input, ":", 3)
+		if len(parts) == 3 {
+			csv := parts[2]
+			if csv == "" {
+				return "" // no selection → empty answer
+			}
+			var labels []string
+			for _, p := range strings.Split(csv, ",") {
+				p = strings.TrimSpace(p)
+				idx, err := strconv.Atoi(p)
+				if err != nil || idx < 1 || idx > len(q.Options) {
+					continue
+				}
+				labels = append(labels, q.Options[idx-1].Label)
+			}
+			return strings.Join(labels, ", ")
+		}
+	}
+
 	// Handle card button callback: "askq:qIdx:optIdx"
 	if strings.HasPrefix(input, "askq:") {
 		parts := strings.SplitN(input, ":", 3)
@@ -7226,6 +7248,16 @@ func (e *Engine) sendAskQuestionPrompt(p Platform, replyCtx any, questions []Use
 	titleSuffix := ""
 	if total > 1 {
 		titleSuffix = fmt.Sprintf(" (%d/%d)", qIdx+1, total)
+	}
+
+	// Multi-select: use native checker+submit UI if the platform supports it.
+	if q.MultiSelect {
+		if ms, ok := p.(MultiSelectQuestionSender); ok {
+			if err := ms.SendMultiSelectQuestion(e.ctx, replyCtx, q, qIdx, total); err == nil {
+				return
+			}
+			// fall through to button card on failure
+		}
 	}
 
 	// Try card (Feishu/Lark)

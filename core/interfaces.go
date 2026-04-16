@@ -158,6 +158,15 @@ type TodoListRenderer interface {
 	RenderTodoList(ctx context.Context, replyCtx any, todos []TodoItem) error
 }
 
+// MultiSelectQuestionSender is an optional interface for platforms that
+// render AskUserQuestion with multiSelect=true as a native multi-select
+// UI (e.g. Feishu's form+checker). Single-select questions still go
+// through the standard button path. qIdx is 0-based, total is the list
+// length (used for the "1/N" header suffix).
+type MultiSelectQuestionSender interface {
+	SendMultiSelectQuestion(ctx context.Context, replyCtx any, q UserQuestion, qIdx, total int) error
+}
+
 // ProgressStyleProvider is an optional interface for platforms that expose
 // a preferred style for intermediate progress rendering.
 // Typical values: "legacy", "compact", "card".
