@@ -541,9 +541,24 @@ func (cs *claudeSession) handleResult(raw map[string]any) {
 
 	var inputTokens, outputTokens int
 	if usage, ok := raw["usage"].(map[string]any); ok {
+		// Claude API splits the input budget across three buckets:
+		//   input_tokens               — fresh, non-cached input for this turn
+		//   cache_read_input_tokens    — prior turns served from cache
+		//   cache_creation_input_tokens — tokens written into cache this turn
+		// For the user-facing "how full is the context window" indicator
+		// we want the total, which is the sum of all three (all count
+		// against the window limit).
+		var cacheRead, cacheCreate int
 		if v, ok := usage["input_tokens"].(float64); ok {
 			inputTokens = int(v)
 		}
+		if v, ok := usage["cache_read_input_tokens"].(float64); ok {
+			cacheRead = int(v)
+		}
+		if v, ok := usage["cache_creation_input_tokens"].(float64); ok {
+			cacheCreate = int(v)
+		}
+		inputTokens += cacheRead + cacheCreate
 		if v, ok := usage["output_tokens"].(float64); ok {
 			outputTokens = int(v)
 		}
