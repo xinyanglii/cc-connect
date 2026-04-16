@@ -1711,9 +1711,9 @@ func (e *Engine) handleMessage(p Platform, msg *Message) {
 				e.reply(p, msg.ReplyCtx, e.i18n.T(MsgBtwSendFailed))
 				return
 			}
-			// /btw merges into the current turn (Claude CLI incorporates it
-			// into the same EventResult). Do NOT increment outstandingMessages
-			// or add to pendingInjects — those assume 1 send → 1 result.
+			// Visible ack — simple text reply user sees immediately.
+			// Matches the pre-fork "✅ 消息已注入" behavior.
+			e.reply(p, msg.ReplyCtx, e.i18n.T(MsgBtwSent))
 			slog.Info("btw injected (merged into current turn)", "session", msg.SessionKey)
 			return
 		}
