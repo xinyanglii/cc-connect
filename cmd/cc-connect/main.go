@@ -1539,6 +1539,7 @@ func buildHeartbeatConfig(hc config.HeartbeatConfig) (core.HeartbeatConfig, erro
 			"tz", time.Local.String(),
 			"hint", "set active_hours_tz to an IANA name (e.g. \"Europe/Berlin\") for deterministic behavior")
 	}
+	cfg.Model = hc.Model
 	return cfg, nil
 }
 

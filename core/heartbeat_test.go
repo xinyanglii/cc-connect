@@ -226,11 +226,11 @@ func TestHeartbeatScheduler_Persistence(t *testing.T) {
 
 func TestParseActiveHours(t *testing.T) {
 	tests := []struct {
-		name     string
-		spec     string
-		wantS    int
-		wantE    int
-		wantErr  bool
+		name    string
+		spec    string
+		wantS   int
+		wantE   int
+		wantErr bool
 	}{
 		{"empty", "", -1, -1, false},
 		{"simple", "8-22", 8, 22, false},
@@ -261,27 +261,7 @@ func TestParseActiveHours(t *testing.T) {
 }
 
 func TestIsActiveHour(t *testing.T) {
-	// Use a fixed timezone so test is not server-TZ dependent
 	utc := time.UTC
-
-	// Helper to stub time.Now at a specific hour
-	hourFix := func(hour int) HeartbeatConfig {
-		return HeartbeatConfig{
-			ActiveStartHour: 8,
-			ActiveEndHour:   22,
-			ActiveHoursLoc:  utc,
-		}
-	}
-	_ = hourFix
-
-	// Since isActiveHour uses time.Now(), we parameterize via Loc tricks:
-	// run logical tests where ActiveStart/End are varied but "now" is
-	// controlled indirectly. For pure unit testing we test the math by
-	// calling with config that always matches / never matches based on
-	// the real current hour. For full coverage we mock time.Now — but
-	// that requires a nowFunc variable. For v1, rely on the integer
-	// branches being exercised by ParseActiveHours + manual hour probing.
-
 	// Structural tests: unset → always active
 	cfg := HeartbeatConfig{ActiveStartHour: -1, ActiveEndHour: -1}
 	if !isActiveHour(cfg) {
@@ -290,7 +270,6 @@ func TestIsActiveHour(t *testing.T) {
 
 	// Derive current hour in UTC for a "matches current window" test
 	currentUTC := time.Now().In(utc).Hour()
-	// Full-day window (0-23 is valid): active at every hour
 	cfg = HeartbeatConfig{ActiveStartHour: 0, ActiveEndHour: 23, ActiveHoursLoc: utc}
 	if currentUTC < 23 {
 		if !isActiveHour(cfg) {
@@ -332,5 +311,35 @@ func TestHumanActiveHours(t *testing.T) {
 				t.Errorf("humanActiveHours = %q, want %q", got, tc.want)
 			}
 		})
+	}
+}
+
+// ── Model override integration ──────────────────────────────────────
+
+func TestHeartbeatConfig_ModelField(t *testing.T) {
+	hs := NewHeartbeatScheduler("")
+	hs.Register("proj", HeartbeatConfig{
+		Enabled:    true,
+		SessionKey: "tg:1:1",
+		Model:      "sonnet",
+	}, nil, "")
+	entry := hs.entries["proj"]
+	if entry == nil {
+		t.Fatal("expected entry")
+	}
+	if entry.config.Model != "sonnet" {
+		t.Errorf("expected Model=sonnet, got %q", entry.config.Model)
+	}
+}
+
+func TestHeartbeatConfig_EmptyModelPreservesLegacyPath(t *testing.T) {
+	hs := NewHeartbeatScheduler("")
+	hs.Register("proj", HeartbeatConfig{
+		Enabled:    true,
+		SessionKey: "tg:1:1",
+	}, nil, "")
+	entry := hs.entries["proj"]
+	if entry.config.Model != "" {
+		t.Errorf("expected empty Model, got %q", entry.config.Model)
 	}
 }

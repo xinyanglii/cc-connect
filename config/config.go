@@ -245,15 +245,16 @@ type TTSConfig struct {
 
 // HeartbeatConfig controls periodic heartbeat for a project.
 type HeartbeatConfig struct {
-	Enabled       *bool  `toml:"enabled"`                     // default false
-	IntervalMins  *int   `toml:"interval_mins,omitempty"`     // minutes between heartbeats; default 30
-	OnlyWhenIdle  *bool  `toml:"only_when_idle,omitempty"`    // only fire when the session is not busy; default true
-	SessionKey    string `toml:"session_key,omitempty"`       // target session key (e.g. "telegram:123:123"); required
-	Prompt        string `toml:"prompt,omitempty"`            // explicit prompt; if empty, reads HEARTBEAT.md from work_dir
-	Silent        *bool  `toml:"silent,omitempty"`            // suppress heartbeat notification; default true
-	TimeoutMins   *int   `toml:"timeout_mins,omitempty"`      // max execution time; default 30
-	ActiveHours   string `toml:"active_hours,omitempty"`      // time window in "HH-HH" format, e.g. "8-22"; empty = 24/7
-	ActiveHoursTZ string `toml:"active_hours_tz,omitempty"`   // IANA tz name, e.g. "Europe/Berlin"; empty = server TZ (with warning)
+	Enabled       *bool  `toml:"enabled"`                   // default false
+	IntervalMins  *int   `toml:"interval_mins,omitempty"`   // minutes between heartbeats; default 30
+	OnlyWhenIdle  *bool  `toml:"only_when_idle,omitempty"`  // only fire when the session is not busy; default true
+	SessionKey    string `toml:"session_key,omitempty"`     // target session key (e.g. "telegram:123:123"); required
+	Prompt        string `toml:"prompt,omitempty"`          // explicit prompt; if empty, reads HEARTBEAT.md from work_dir
+	Silent        *bool  `toml:"silent,omitempty"`          // suppress heartbeat notification; default true
+	TimeoutMins   *int   `toml:"timeout_mins,omitempty"`    // max execution time; default 30
+	ActiveHours   string `toml:"active_hours,omitempty"`    // time window "HH-HH", e.g. "8-22"; empty = 24/7
+	ActiveHoursTZ string `toml:"active_hours_tz,omitempty"` // IANA tz name; empty = server TZ (with warning)
+	Model         string `toml:"model,omitempty"`           // agent model override; empty = main session. When set, each tick spawns a fresh side session (~1-2s cold start cost; avoid for interval_mins=1)
 }
 
 // AutoCompressConfig controls automatic context compression for a project.

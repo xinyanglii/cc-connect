@@ -24,6 +24,7 @@ type HeartbeatConfig struct {
 	ActiveStartHour int            // 0-23; -1 = always active (unset)
 	ActiveEndHour   int            // 0-23; -1 = always active (unset)
 	ActiveHoursLoc  *time.Location // nil = time.Local
+	Model           string         // agent model override; empty = main session. Non-empty = fresh side session per tick.
 }
 
 // HeartbeatStatus is returned by the /heartbeat command.
@@ -442,7 +443,7 @@ func (hs *HeartbeatScheduler) execute(entry *heartbeatEntry) {
 	timeout := time.Duration(cfg.TimeoutMins) * time.Minute
 	done := make(chan error, 1)
 	go func() {
-		done <- entry.engine.ExecuteHeartbeat(cfg.SessionKey, prompt, cfg.Silent)
+		done <- entry.engine.ExecuteHeartbeat(cfg.SessionKey, prompt, cfg.Silent, cfg.Model)
 	}()
 
 	var err error

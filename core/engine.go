@@ -1118,9 +1118,12 @@ func (e *Engine) executeCronShell(p Platform, replyCtx any, job *CronJob) error 
 	return nil
 }
 
-// ExecuteHeartbeat runs a heartbeat check by injecting a synthetic message
-// into the main session, similar to cron but designed for periodic awareness.
-func (e *Engine) ExecuteHeartbeat(sessionKey, prompt string, silent bool) error {
+// ExecuteHeartbeat runs a heartbeat check by injecting a synthetic message.
+// When model is empty, injects into the main session (backwards-compatible path).
+// When model is non-empty, spawns a fresh side session with that model override
+// — each tick uses a unique sideKey so concurrent ticks never collide, and
+// cleanup happens via defer regardless of timeout.
+func (e *Engine) ExecuteHeartbeat(sessionKey, prompt string, silent bool, model string) error {
 	platformName := ""
 	if idx := strings.Index(sessionKey, ":"); idx > 0 {
 		platformName = sessionKey[:idx]
@@ -1165,6 +1168,35 @@ func (e *Engine) ExecuteHeartbeat(sessionKey, prompt string, silent bool) error 
 		e.send(targetPlatform, replyCtx, "💓 heartbeat")
 	}
 
+	// Side-session path: unique key per tick, always fresh agent subprocess.
+	// Avoids collision if previous tick is still running (slow model or long
+	// prompt). Cleanup via defer runs regardless of how the function returns.
+	if model != "" {
+		if _, ok := e.agent.(AgentWithOptions); !ok {
+			return fmt.Errorf("agent %T does not support per-session model override (requested model=%q for heartbeat)", e.agent, model)
+		}
+		sideKey := fmt.Sprintf("%s#heartbeat-%d", sessionKey, time.Now().UnixNano())
+		sideSession := e.sessions.NewSideSession(sideKey, "heartbeat")
+		if !sideSession.TryLock() {
+			return fmt.Errorf("heartbeat side session %q unexpectedly busy", sideKey)
+		}
+		iKey := sideKey
+		defer e.cleanupInteractiveState(iKey)
+
+		msg := &Message{
+			SessionKey:    sideKey,
+			Platform:      platformName,
+			UserID:        "heartbeat",
+			UserName:      "heartbeat",
+			Content:       prompt,
+			ReplyCtx:      replyCtx,
+			ModelOverride: model,
+		}
+		e.processInteractiveMessageWith(targetPlatform, msg, sideSession, e.agent, e.sessions, iKey, "", sideKey)
+		return nil
+	}
+
+	// Main-session path (legacy): inject synthetic message into active session.
 	msg := &Message{
 		SessionKey: sessionKey,
 		Platform:   platformName,
