@@ -1834,15 +1834,12 @@ func (p *Platform) SendImage(ctx context.Context, rctx any, img core.ImageAttach
 
 	imageKey := *uploadResp.Data.ImageKey
 
-	// Rich card path: embed image + metadata caption when streaming cards
-	// are enabled. Falls back silently to plain MsgTypeImage on failure
-	// (cardkit permissions missing, etc.).
-	if p.streamingCard {
-		if err := p.sendImagePreviewCard(ctx, rc, imageKey, img); err == nil {
-			return nil
-		}
-	}
-
+	// Send as native inline image (MsgTypeImage). Previously this wrapped
+	// the image in an interactive preview card with filename/MIME/size
+	// caption when streamingCard was enabled, but user feedback (2026-04-17)
+	// showed the card rendered as a "file card" rather than inline image,
+	// which was the wrong default. The CLI send --image is currently the
+	// sole caller of SendImage, and the desired UX is always inline.
 	imageContent, err := (&larkim.MessageImage{ImageKey: imageKey}).String()
 	if err != nil {
 		return fmt.Errorf("%s: build image message: %w", p.tag(), err)
