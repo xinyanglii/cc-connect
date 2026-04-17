@@ -1971,13 +1971,36 @@ func (p *Platform) SendFile(ctx context.Context, rctx any, file core.FileAttachm
 	if uploadResp.Data == nil || uploadResp.Data.FileKey == nil {
 		return fmt.Errorf("%s: upload file: no file_key returned", p.tag())
 	}
+	fileKey := *uploadResp.Data.FileKey
 
-	fileContent, err := (&larkim.MessageFile{FileKey: *uploadResp.Data.FileKey}).String()
-	if err != nil {
-		return fmt.Errorf("%s: build file message: %w", p.tag(), err)
+	// Feishu enforces that the upload file_type must match the sent msg_type:
+	// mp4 → media, opus → audio, everything else → file. If the CLI lets a
+	// .mp4 land here via --file, we upload as FileTypeMp4 (detected from the
+	// extension) and must send MsgTypeMedia — otherwise the server rejects
+	// with code 230055 "The type of file upload does not match the type of
+	// message being sent". See LRN-20260417-007.
+	var content, msgType string
+	switch fileType {
+	case larkim.FileTypeMp4:
+		c, err := (&larkim.MessageMedia{FileKey: fileKey}).String()
+		if err != nil {
+			return fmt.Errorf("%s: build media message: %w", p.tag(), err)
+		}
+		content, msgType = c, larkim.MsgTypeMedia
+	case larkim.FileTypeOpus:
+		c, err := (&larkim.MessageAudio{FileKey: fileKey}).String()
+		if err != nil {
+			return fmt.Errorf("%s: build audio message: %w", p.tag(), err)
+		}
+		content, msgType = c, larkim.MsgTypeAudio
+	default:
+		c, err := (&larkim.MessageFile{FileKey: fileKey}).String()
+		if err != nil {
+			return fmt.Errorf("%s: build file message: %w", p.tag(), err)
+		}
+		content, msgType = c, larkim.MsgTypeFile
 	}
-
-	return p.sendMediaMessage(ctx, rc, larkim.MsgTypeFile, fileContent)
+	return p.sendMediaMessage(ctx, rc, msgType, content)
 }
 
 func (p *Platform) sendMediaMessage(ctx context.Context, rc replyContext, msgType, content string) error {
