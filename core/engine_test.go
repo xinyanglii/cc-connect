@@ -665,6 +665,7 @@ func TestEngineSendToSessionWithAttachments(t *testing.T) {
 		"delivery ready",
 		[]ImageAttachment{{MimeType: "image/png", Data: []byte("img"), FileName: "chart.png"}},
 		[]FileAttachment{{MimeType: "text/plain", Data: []byte("doc"), FileName: "report.txt"}},
+		nil,
 	)
 	if err != nil {
 		t.Fatalf("SendToSessionWithAttachments returned error: %v", err)
@@ -694,6 +695,7 @@ func TestEngineSendToSessionWithAttachments_UnsupportedPlatform(t *testing.T) {
 		"delivery ready",
 		[]ImageAttachment{{MimeType: "image/png", Data: []byte("img"), FileName: "chart.png"}},
 		nil,
+		nil,
 	)
 	if err == nil {
 		t.Fatal("expected unsupported attachment send to fail")
@@ -717,6 +719,7 @@ func TestEngineSendToSessionWithAttachments_DisabledByConfig(t *testing.T) {
 		"delivery ready",
 		nil,
 		[]FileAttachment{{MimeType: "text/plain", Data: []byte("doc"), FileName: "report.txt"}},
+		nil,
 	)
 	if err == nil {
 		t.Fatal("expected attachment send to be blocked")
@@ -755,7 +758,7 @@ func TestEngineSendToSessionWithAttachments_MultiWorkspaceRawSessionKey(t *testi
 		replyCtx: "ctx-1",
 	}
 
-	err := e.SendToSessionWithAttachments(rawKey, "delivery ready", nil, nil)
+	err := e.SendToSessionWithAttachments(rawKey, "delivery ready", nil, nil, nil)
 	if err != nil {
 		t.Fatalf("SendToSessionWithAttachments returned error: %v", err)
 	}
@@ -783,7 +786,7 @@ func TestEngineSendToSessionWithAttachments_WorkspacePrefixedSessionKey(t *testi
 	e := NewEngine("test", &stubAgent{}, []Platform{p}, "", LangEnglish)
 
 	prefixed := "/tmp/myproject:slack:C123:U1"
-	err := e.SendToSessionWithAttachments(prefixed, "delivery ready", nil, nil)
+	err := e.SendToSessionWithAttachments(prefixed, "delivery ready", nil, nil, nil)
 	if err != nil {
 		t.Fatalf("SendToSessionWithAttachments returned error: %v", err)
 	}
@@ -948,7 +951,7 @@ func TestProcessInteractiveEvents_SuppressesDuplicateSideChannelText(t *testing.
 		MimeType: "text/markdown",
 		Data:     []byte("body"),
 		FileName: "AGENTS.md",
-	}}); err != nil {
+	}}, nil); err != nil {
 		t.Fatalf("SendToSessionWithAttachments returned error: %v", err)
 	}
 
@@ -977,7 +980,7 @@ func TestProcessInteractiveEvents_DoesNotSuppressDifferentFinalText(t *testing.T
 		MimeType: "text/markdown",
 		Data:     []byte("body"),
 		FileName: "AGENTS.md",
-	}}); err != nil {
+	}}, nil); err != nil {
 		t.Fatalf("SendToSessionWithAttachments returned error: %v", err)
 	}
 
@@ -4033,7 +4036,12 @@ func TestCmdReasoning_UsesInlineButtonsOnButtonOnlyPlatform(t *testing.T) {
 	}
 }
 
-func TestCmdReasoning_SwitchesEffortAndResetsSession(t *testing.T) {
+func TestCmdReasoning_SwitchesEffortAndPreservesSession(t *testing.T) {
+	// Claude CLI picks up the new effort via env/flag on the next --resume,
+	// so the same session continues with the new effort. Clearing the
+	// AgentSessionID would orphan the session from cc-connect's known set
+	// (hides it from /list, breaks /switch <name>). Same rationale as the
+	// cmdModel fix (c92e101).
 	p := &stubPlatformEngine{n: "plain"}
 	agent := &stubModelModeAgent{}
 	e := NewEngine("test", agent, []Platform{p}, "", LangEnglish)
@@ -4048,11 +4056,11 @@ func TestCmdReasoning_SwitchesEffortAndResetsSession(t *testing.T) {
 	if agent.reasoningEffort != "high" {
 		t.Fatalf("reasoning effort = %q, want high", agent.reasoningEffort)
 	}
-	if s.GetAgentSessionID() != "" {
-		t.Fatalf("AgentSessionID = %q, want cleared", s.GetAgentSessionID())
+	if got := s.GetAgentSessionID(); got != "existing-session" {
+		t.Fatalf("AgentSessionID = %q, want preserved %q", got, "existing-session")
 	}
-	if len(s.History) != 0 {
-		t.Fatalf("history length = %d, want 0", len(s.History))
+	if len(s.History) != 1 {
+		t.Fatalf("history length = %d, want 1 (preserved)", len(s.History))
 	}
 	if len(p.sent) != 1 || !strings.Contains(p.sent[0], "Reasoning effort switched to `high`") {
 		t.Fatalf("sent = %v, want reasoning changed message", p.sent)
