@@ -4113,10 +4113,8 @@ func (e *Engine) cmdSwitch(p Platform, msg *Message, args []string) {
 	e.cleanupInteractiveState(interactiveKey)
 	slog.Info("cmdSwitch: cleanup done", "session_key", msg.SessionKey)
 
-	session := sessions.GetOrCreateActive(msg.SessionKey)
-	session.SetAgentInfo(matched.ID, agent.Name(), matched.Summary)
+	session := sessions.SwitchToAgentSession(msg.SessionKey, matched.ID, agent.Name(), matched.Summary)
 	session.ClearHistory()
-	sessions.Save()
 
 	shortID := matched.ID
 	if len(shortID) > 12 {
@@ -7758,10 +7756,8 @@ func (e *Engine) executeCardAction(cmd, args, sessionKey string) {
 		}
 		interactiveKey := e.interactiveKeyForSessionKey(sessionKey)
 		e.cleanupInteractiveState(interactiveKey)
-		session := sessions.GetOrCreateActive(sessionKey)
-		session.SetAgentInfo(matched.ID, agent.Name(), matched.Summary)
+		session := sessions.SwitchToAgentSession(sessionKey, matched.ID, agent.Name(), matched.Summary)
 		session.ClearHistory()
-		sessions.Save()
 
 	case "/dir":
 		fields := strings.Fields(args)
