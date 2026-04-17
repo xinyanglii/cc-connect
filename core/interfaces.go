@@ -64,14 +64,15 @@ Your normal text responses are automatically delivered to the user — just repl
 
 ## Available tools
 
-### Send generated images or files back to the user
-When you generate a local image or file that should be sent to the user, use:
+### Send generated images, files, or voice messages back to the user
+When you generate a local image, file, or audio clip that should be sent to the user, use:
 
   cc-connect send --image /absolute/path/to/image.png
   cc-connect send --file /absolute/path/to/report.pdf
+  cc-connect send --voice /absolute/path/to/voice.opus
   cc-connect send --file /absolute/path/to/report.pdf --image /absolute/path/to/chart.png
 
-You may repeat --image / --file multiple times. Use this only for generated attachments that need to be delivered to the user.
+You may repeat --image / --file multiple times. Only one --voice per invocation (audio arrives as a native voice-message card, not a file download). Use this only for generated attachments that need to be delivered to the user.
 If you include --message, do not repeat the exact same sentence again in your normal reply, because your normal reply is also delivered automatically.
 
 ### Scheduled tasks (cron)

@@ -73,6 +73,7 @@ func parseSendArgs(args []string) (core.SendRequest, string, error) {
 	var useStdin bool
 	var imagePaths []string
 	var filePaths []string
+	var voicePath string
 	var positional []string
 
 	for i := 0; i < len(args); i++ {
@@ -107,6 +108,15 @@ func parseSendArgs(args []string) (core.SendRequest, string, error) {
 			}
 			i++
 			filePaths = append(filePaths, args[i])
+		case "--voice":
+			if i+1 >= len(args) {
+				return req, "", fmt.Errorf("--voice requires a path")
+			}
+			if voicePath != "" {
+				return req, "", fmt.Errorf("--voice may be specified at most once")
+			}
+			i++
+			voicePath = args[i]
 		case "--stdin":
 			useStdin = true
 		case "--data-dir":
@@ -147,10 +157,15 @@ func parseSendArgs(args []string) (core.SendRequest, string, error) {
 	if err != nil {
 		return req, "", err
 	}
+	audio, err := loadVoiceAttachment(voicePath)
+	if err != nil {
+		return req, "", err
+	}
 	req.Images = images
 	req.Files = files
+	req.Audio = audio
 
-	if req.Message == "" && len(req.Images) == 0 && len(req.Files) == 0 {
+	if req.Message == "" && len(req.Images) == 0 && len(req.Files) == 0 && req.Audio == nil {
 		return req, "", fmt.Errorf("message or attachment is required")
 	}
 
@@ -182,6 +197,21 @@ func loadFileAttachments(paths []string) ([]core.FileAttachment, error) {
 		files = append(files, core.FileAttachment{MimeType: mimeType, Data: data, FileName: fileName})
 	}
 	return files, nil
+}
+
+func loadVoiceAttachment(path string) (*core.AudioAttachment, error) {
+	if path == "" {
+		return nil, nil
+	}
+	data, fileName, mimeType, err := readAttachment(path)
+	if err != nil {
+		return nil, err
+	}
+	if !strings.HasPrefix(mimeType, "audio/") {
+		return nil, fmt.Errorf("%s is not an audio file (detected mime: %s)", path, mimeType)
+	}
+	format := strings.TrimPrefix(strings.ToLower(filepath.Ext(fileName)), ".")
+	return &core.AudioAttachment{MimeType: mimeType, Data: data, Format: format}, nil
 }
 
 const maxAttachmentSize = 50 << 20 // 50 MB
@@ -248,6 +278,7 @@ func printSendUsage() {
        cc-connect send [options] --stdin < file
        cc-connect send [options] --image <path>
        cc-connect send [options] --file <path>
+       cc-connect send [options] --voice <path>
        echo "msg" | cc-connect send [options] --stdin
 
 Send a message or attachment to an active cc-connect session.
@@ -256,6 +287,7 @@ Options:
   -m, --message <text>     Message to send (preferred over positional args)
       --image <path>       Send an image attachment (repeatable)
       --file <path>        Send a file attachment (repeatable)
+      --voice <path>       Send an audio file as a native voice message (at most one)
       --stdin              Read message from stdin (best for long/special-char messages)
   -p, --project <name>     Target project (optional if only one project)
   -s, --session <key>      Target session key (optional, picks first active)
@@ -267,6 +299,7 @@ Examples:
   cc-connect send -m "Build completed successfully"
   cc-connect send --message "Chart generated" --image /tmp/chart.png
   cc-connect send --file /tmp/report.pdf
+  cc-connect send --voice /tmp/reply.opus
   cc-connect send --stdin <<'EOF'
     Long message with "special" chars, $variables, and newlines
   EOF`)

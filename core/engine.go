@@ -6929,10 +6929,10 @@ func (e *Engine) switchProvider(p Platform, msg *Message, switcher ProviderSwitc
 // SendToSession sends a message to an active session from an external caller (API/CLI).
 // If sessionKey is empty, it picks the first active session.
 func (e *Engine) SendToSession(sessionKey, message string) error {
-	return e.SendToSessionWithAttachments(sessionKey, message, nil, nil)
+	return e.SendToSessionWithAttachments(sessionKey, message, nil, nil, nil)
 }
 
-func (e *Engine) SendToSessionWithAttachments(sessionKey, message string, images []ImageAttachment, files []FileAttachment) error {
+func (e *Engine) SendToSessionWithAttachments(sessionKey, message string, images []ImageAttachment, files []FileAttachment, audio *AudioAttachment) error {
 	e.interactiveMu.Lock()
 
 	var state *interactiveState
@@ -7014,10 +7014,10 @@ func (e *Engine) SendToSessionWithAttachments(sessionKey, message string, images
 		return fmt.Errorf("no active session found (key=%q)", sessionKey)
 	}
 
-	if message == "" && len(images) == 0 && len(files) == 0 {
+	if message == "" && len(images) == 0 && len(files) == 0 && audio == nil {
 		return fmt.Errorf("message or attachment is required")
 	}
-	if (len(images) > 0 || len(files) > 0) && !e.attachmentSendEnabled {
+	if (len(images) > 0 || len(files) > 0 || audio != nil) && !e.attachmentSendEnabled {
 		return ErrAttachmentSendDisabled
 	}
 
@@ -7039,6 +7039,15 @@ func (e *Engine) SendToSessionWithAttachments(sessionKey, message string, images
 		}
 	}
 
+	var audioSender AudioSender
+	if audio != nil {
+		var ok bool
+		audioSender, ok = p.(AudioSender)
+		if !ok {
+			return fmt.Errorf("platform %s: %w", p.Name(), ErrNotSupported)
+		}
+	}
+
 	if message != "" {
 		if err := e.waitOutgoing(p); err != nil {
 			return err
@@ -7046,7 +7055,7 @@ func (e *Engine) SendToSessionWithAttachments(sessionKey, message string, images
 		if err := p.Send(e.ctx, replyCtx, message); err != nil {
 			return err
 		}
-		if state != nil && (len(images) > 0 || len(files) > 0) {
+		if state != nil && (len(images) > 0 || len(files) > 0 || audio != nil) {
 			state.mu.Lock()
 			state.sideText = strings.TrimSpace(message)
 			state.mu.Unlock()
@@ -7065,6 +7074,14 @@ func (e *Engine) SendToSessionWithAttachments(sessionKey, message string, images
 			return err
 		}
 		if err := fileSender.SendFile(e.ctx, replyCtx, file); err != nil {
+			return err
+		}
+	}
+	if audio != nil {
+		if err := e.waitOutgoing(p); err != nil {
+			return err
+		}
+		if err := audioSender.SendAudio(e.ctx, replyCtx, audio.Data, audio.Format); err != nil {
 			return err
 		}
 	}

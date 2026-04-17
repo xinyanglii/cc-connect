@@ -33,6 +33,7 @@ type SendRequest struct {
 	Message    string            `json:"message"`
 	Images     []ImageAttachment `json:"images,omitempty"`
 	Files      []FileAttachment  `json:"files,omitempty"`
+	Audio      *AudioAttachment  `json:"audio,omitempty"`
 }
 
 // NewAPIServer creates an API server on a Unix socket.
@@ -141,7 +142,7 @@ func (s *APIServer) handleSend(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid JSON: "+err.Error(), http.StatusBadRequest)
 		return
 	}
-	if req.Message == "" && len(req.Images) == 0 && len(req.Files) == 0 {
+	if req.Message == "" && len(req.Images) == 0 && len(req.Files) == 0 && req.Audio == nil {
 		http.Error(w, "message or attachment is required", http.StatusBadRequest)
 		return
 	}
@@ -167,7 +168,7 @@ func (s *APIServer) handleSend(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := engine.SendToSessionWithAttachments(req.SessionKey, req.Message, req.Images, req.Files); err != nil {
+	if err := engine.SendToSessionWithAttachments(req.SessionKey, req.Message, req.Images, req.Files, req.Audio); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
