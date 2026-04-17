@@ -6259,10 +6259,11 @@ func (e *Engine) cmdReasoning(p Platform, msg *Message, args []string) {
 
 	switcher.SetReasoningEffort(target)
 	e.cleanupInteractiveState(e.interactiveKeyForSessionKey(msg.SessionKey))
-
-	s := e.sessions.GetOrCreateActive(msg.SessionKey)
-	s.SetAgentSessionID("", "")
-	s.ClearHistory()
+	// Preserve AgentSessionID across reasoning-effort switch — claude CLI
+	// picks up the new effort via env/flag on the next --resume, so the
+	// same session continues with the new effort. Clearing it would orphan
+	// the session from cc-connect's known set, hiding it from /list and
+	// breaking /switch <name>. Same rationale as cmdModel fix (c92e101).
 	e.sessions.Save()
 
 	e.reply(p, msg.ReplyCtx, e.i18n.Tf(MsgReasoningChanged, target))
@@ -7646,9 +7647,8 @@ func (e *Engine) executeCardAction(cmd, args, sessionKey string) {
 				switcher.SetReasoningEffort(target)
 				interactiveKey := e.interactiveKeyForSessionKey(sessionKey)
 				e.cleanupInteractiveState(interactiveKey)
-				s := e.sessions.GetOrCreateActive(sessionKey)
-				s.SetAgentSessionID("", "")
-				s.ClearHistory()
+				// Preserve AgentSessionID — see cmdReasoning / cmdModel
+				// (c92e101) for rationale.
 				e.sessions.Save()
 				return
 			}
