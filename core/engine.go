@@ -3955,21 +3955,13 @@ func (e *Engine) cmdNew(p Platform, msg *Message, args []string) {
 	}
 }
 
-// filterOwnedSessions removes agent sessions that are not tracked by cc-connect's
-// session manager. This prevents external CLI sessions in the same work_dir from
-// appearing in /list, /switch, /delete, etc. If the session manager has no tracked
-// agent sessions at all (e.g. first run), all sessions are returned unfiltered.
-func filterOwnedSessions(sessions []AgentSessionInfo, known map[string]struct{}) []AgentSessionInfo {
-	if len(known) == 0 {
-		return sessions
-	}
-	filtered := make([]AgentSessionInfo, 0, len(sessions))
-	for _, s := range sessions {
-		if _, ok := known[s.ID]; ok {
-			filtered = append(filtered, s)
-		}
-	}
-	return filtered
+// filterOwnedSessions is a pass-through: we want /list, /switch, /delete, /search
+// to show every Claude session JSONL in the work_dir, not just the ones spawned
+// via cc-connect. Upstream added ownership filtering in #569 to hide terminal CLI
+// sessions; our fork keeps them visible because the user treats all sessions as
+// their own regardless of entry point.
+func filterOwnedSessions(sessions []AgentSessionInfo, _ map[string]struct{}) []AgentSessionInfo {
+	return sessions
 }
 
 const listPageSize = 20
