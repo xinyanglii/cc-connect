@@ -523,7 +523,11 @@ func TestKnownAgentSessionIDs(t *testing.T) {
 	}
 }
 
-func TestFilterOwnedSessions_FiltersUnknown(t *testing.T) {
+// Fork deviation: filterOwnedSessions is a pass-through (see engine.go). We
+// deliberately show every Claude JSONL session in the work_dir regardless of
+// whether cc-connect spawned it. Upstream's ownership-filtering test is rewritten
+// here to lock that pass-through semantics.
+func TestFilterOwnedSessions_PassThrough(t *testing.T) {
 	all := []AgentSessionInfo{
 		{ID: "owned-1"},
 		{ID: "external-1"},
@@ -535,11 +539,13 @@ func TestFilterOwnedSessions_FiltersUnknown(t *testing.T) {
 		"owned-2": {},
 	}
 	filtered := filterOwnedSessions(all, known)
-	if len(filtered) != 2 {
-		t.Fatalf("filterOwnedSessions len = %d, want 2", len(filtered))
+	if len(filtered) != len(all) {
+		t.Fatalf("filterOwnedSessions len = %d, want %d (pass-through)", len(filtered), len(all))
 	}
-	if filtered[0].ID != "owned-1" || filtered[1].ID != "owned-2" {
-		t.Fatalf("filtered = %v, want owned-1 and owned-2", filtered)
+	for i, s := range all {
+		if filtered[i].ID != s.ID {
+			t.Fatalf("filtered[%d] = %q, want %q (pass-through preserves order)", i, filtered[i].ID, s.ID)
+		}
 	}
 }
 
