@@ -41,28 +41,10 @@
 <details open>
 <summary>Sponsors</summary>
 
-[![MiniMax](assets/banners/minimax-en.jpeg)](https://platform.minimax.io/subscribe/token-plan?code=lqYrKBvjke&source=link)
-
-MiniMax-M2.7 is a next-generation large language model designed for autonomous evolution and real-world productivity. Unlike traditional models, M2.7 actively participates in its own improvement through agent teams, dynamic tool use, and reinforcement learning loops. It delivers strong performance in software engineering (56.22% on SWE-Pro, 55.6% on VIBE-Pro, 57.0% on Terminal Bench 2) and excels in complex office workflows, achieving a leading 1495 ELO on GDPval-AA. With high-fidelity editing across Word, Excel, and PowerPoint, and a 97% adherence rate across 40+ complex skills, M2.7 sets a new standard for building AI-native workflows and organizations.
-
-[Click here](https://platform.minimax.io/subscribe/token-plan?code=lqYrKBvjke&source=link) to get an exclusive 12% off the MiniMax Token Plan + voucher for cc-connect users!
-
----
-
 <table>
 <tr>
 <td width="150"><a href="https://aigocode.com/invite/CYY3C85C"><img src="assets/sponsors/aigocode.png" alt="AIGoCode" width="120"></a></td>
 <td>Thanks to AIGoCode for sponsoring this project! AIGoCode is an all-in-one platform that integrates Claude Code, Codex, and the latest Gemini models, providing you with stable, efficient, and highly cost-effective AI coding services. The platform offers flexible subscription plans, zero risk of account suspension, direct access with no VPN required, and lightning-fast responses. AIGoCode has prepared a special benefit for cc-connect users: if you register via <a href="https://aigocode.com/invite/CYY3C85C">this link</a>, you'll receive an extra 10% bonus credit on your first top-up!</td>
-</tr>
-
-<tr>
-<td width="150"><a href="https://www.dmxapi.cn/register?aff=NDln"><img src="assets/sponsors/dmx-en.jpg" alt="DMXAPI" width="120"></a></td>
-<td>Thanks to DMXAPI for sponsoring this project! DMXAPI provides global large model API services to 200+ enterprise users. One API key for all global models. Features include: instant invoicing, unlimited concurrency, starting from $0.15, 24/7 technical support. GPT/Claude/Gemini all at 32% off, domestic models 20-50% off, Claude Code exclusive models at 66% off! Register via <a href="https://www.dmxapi.cn/register?aff=NDln">this link</a>.</td>
-</tr>
-
-<tr>
-<td width="150"><a href="https://www.shengsuanyun.com/?from=CH_67XCLZGS"><img src="assets/sponsors/shengsuanyun.svg" alt="Shengsuanyun" width="120"></a></td>
-<td>Thanks to Shengsuanyun for sponsoring this project! Shengsuanyun is a super factory dedicated to serving AI Native Teams, an industrial-grade AI task parallel execution platform, and a model marketplace that aggregates and supplies computing power from domestic and international LLM and image/video multimedia models such as Claude, Chatgpt, and Gemini. It guarantees no reverse engineering or data manipulation, boasts a 99.7% SLA availability across the entire site, and its <a href="https://watch.shengsuanyun.com/status/shengsuanyun">monitoring interface</a> is consistently green. Furthermore, it offers an enterprise-grade customized gateway for refined cost and access control, featuring intelligent routing, security protection, and BYOK enterprise-provided key hosting. The platform is billed on a pay-as-you-go basis and with a tokens plan (coming soon), and invoices are available. New users who register using <a href="https://www.shengsuanyun.com/?from=CH_67XCLZGS">this link</a> will receive 10 yuan in model power and a 10% bonus on their first deposit.</td>
 </tr>
 
 <tr>
