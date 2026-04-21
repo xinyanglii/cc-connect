@@ -61,6 +61,11 @@
 <td width="150"><a href="https://console.claudeapi.com/register?aff=GDbA"><img src="assets/sponsors/claudeapi.svg" alt="claudeapi.com" width="120"></a></td>
 <td>感谢 claudeapi.com 对本项目的赞助！claudeapi 是面向中高端用户的高质量直连 Claude 服务，完整接入 Anthropic 官方第一方 Keys 和 AWS Bedrock 官方渠道——无逆向工程、无智力降级、无拼接。完整保留 Opus / Sonnet / Haiku 的官方能力、长上下文和 Tool Calling 性能。专为 Claude Code 重度用户、Agent 开发者和企业团队设计，开箱即用、企业级稳定。支持开票和团队入驻。通过 <a href="https://console.claudeapi.com/register?aff=GDbA">此链接</a> 注册。</td>
 </tr>
+
+<tr>
+<td width="150"><a href="https://ddshub.short.gy/ccconnect"><img src="assets/sponsors/ddshub.png" alt="DDS Hub" width="120"></a></td>
+<td>感谢 DDS 赞助本项目！呆呆兽是一家专注 Claude 和 CodeX 的可靠高效 API 中转站，稳定运行、价格透明、开票便捷。为开发者提供高性价比的 AI 模型接入服务。通过 <a href="https://ddshub.short.gy/ccconnect">此链接</a> 注册。</td>
+</tr>
 </table>
 
 </details>
@@ -91,6 +96,7 @@
 - **技能管理** — 新增 `/skills` 页面，支持本地技能浏览和推荐预设。
 - **全局服务商管理** — 在 Web UI 中添加/编辑/删除 Provider，支持从 cc-switch 配置导入。
 - **个人微信** — 用 **微信个人号（ilink 长轮询）** 和本地 Agent 对话；支持扫码 `weixin setup`、CDN 收发图片/文件，**无需公网 IP**。*[接入说明 → `docs/weixin.md`](docs/weixin.md)*
+- **微博私信** — 通过 **微博私信** 与 Agent 对话，WebSocket 连接，无需公网 IP，支持流式文本回复。
 - **飞书增强** — 自动解析 `@成员` 提及、多级回复链识别、完成 Emoji 反应。
 - **新增 Agent** — 支持 Kimi CLI 和 Pi agent。
 
@@ -109,15 +115,15 @@
 
 † **QQ（NapCat / OneBot）** — 非官方自建桥接，体验依赖你的 NapCat 与网络环境。
 
-| 能力 | 飞书 | 钉钉 | Telegram | Slack | Discord | LINE | 企业微信 | **微信个人号**<br>（ilink） | QQ† | QQ 官方机器人 |
-|------|:----:|:----:|:--------:|:-----:|:-------:|:----:|:--------:|:--------------------------:|:---:|:------------:|
-| 文本与斜杠命令 | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| Markdown / 卡片 | ✅ | ✅ | ✅ | ✅ | ✅ | ⚠️ | ⚠️ | ✅ | ✅ | ✅ |
-| 流式 / 分片回复 | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| 图片与文件 | ✅ | ✅ | ✅ | ✅ | ✅ | ⚠️ | ✅ | ✅ | ✅ | ✅ |
-| 语音 / STT / TTS | ⚠️ | ⚠️ | ✅ | ⚠️ | ⚠️ | ❌ | ⚠️ | ✅ | ⚠️ | ⚠️ |
-| 私聊 | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| 群聊 / 频道 | ✅ | ✅ | ✅ | ✅ | ✅ | ⚠️ | ✅ | ✅ | ✅ | ✅ |
+| 能力 | 飞书 | 钉钉 | Telegram | Slack | Discord | LINE | 企业微信 | 微博 | **微信个人号**<br>（ilink） | QQ† | QQ 官方机器人 |
+|------|:----:|:----:|:--------:|:-----:|:-------:|:----:|:--------:|:----:|:--------------------------:|:---:|:------------:|
+| 文本与斜杠命令 | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Markdown / 卡片 | ✅ | ✅ | ✅ | ✅ | ✅ | ⚠️ | ⚠️ | ❌ | ✅ | ✅ | ✅ |
+| 流式 / 分片回复 | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| 图片与文件 | ✅ | ✅ | ✅ | ✅ | ✅ | ⚠️ | ✅ | ❌ | ✅ | ✅ | ✅ |
+| 语音 / STT / TTS | ⚠️ | ⚠️ | ✅ | ⚠️ | ⚠️ | ❌ | ⚠️ | ❌ | ✅ | ⚠️ | ⚠️ |
+| 私聊 | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| 群聊 / 频道 | ✅ | ✅ | ✅ | ✅ | ✅ | ⚠️ | ✅ | ❌ | ✅ | ✅ | ✅ |
 
 > **企业微信：** Webhook 模式需要**公网 URL**；长连接等模式多数**不需要**。  
 > **语音行：** 多数平台要在 `config.toml` 里配置 `[speech]` / TTS 等，表中为经验性归纳。  
@@ -182,9 +188,13 @@
 **通过 npm：**
 
 ```bash
-# 稳定版
-npm install -g cc-connect
+# npm install -g cc-connect
+```
 
+**通过 Homebrew（macOS / Linux）：**
+
+```bash
+brew install cc-connect
 ```
 
 **从 [GitHub Releases](https://github.com/chenhg5/cc-connect/releases) 下载：**
@@ -235,6 +245,9 @@ vim ~/.cc-connect/config.toml
 # npm
 npm install -g cc-connect
 
+# Homebrew
+brew upgrade cc-connect
+
 # 二进制自更新
 cc-connect update           # 稳定版
 cc-connect update --pre     # 含预发布版本
@@ -262,6 +275,7 @@ cc-connect update --pre     # 含预发布版本
 | Platform | Telegram | ✅ Long Polling — 无需公网 IP |
 | Platform | Slack | ✅ Socket Mode — 无需公网 IP |
 | Platform | Discord | ✅ Gateway — 无需公网 IP |
+| Platform | 微博 | ✅ WebSocket — 无需公网 IP |
 | Platform | LINE | ✅ Webhook — 需要公网 URL |
 | Platform | 企业微信 | ✅ WebSocket / Webhook |
 | Platform | 微信个人号（ilink） | ✅— HTTP 长轮询 — 无需公网 IP |
@@ -278,6 +292,7 @@ cc-connect update --pre     # 含预发布版本
 | Telegram | [docs/telegram.md](docs/telegram.md) | Long Polling | 不需要 |
 | Slack | [docs/slack.md](docs/slack.md) | Socket Mode | 不需要 |
 | Discord | [docs/discord.md](docs/discord.md) | Gateway | 不需要 |
+| 微博 | [docs/weibo.md](docs/weibo.md) | WebSocket | 不需要 |
 | 企业微信 | [docs/wecom.md](docs/wecom.md) | WebSocket / Webhook | 不需要 (WS) / 需要 (Webhook) |
 | 微信个人号（ilink） | [docs/weixin.md](docs/weixin.md) | HTTP 长轮询（ilink） | 不需要 |
 | QQ / QQ 机器人 | [docs/qq.md](docs/qq.md) | WebSocket | 不需要 |
@@ -302,6 +317,31 @@ cc-connect update --pre     # 含预发布版本
 reset_on_idle_mins = 60
 ```
 
+
+### 🛡️ 系统用户隔离 (`run_as_user`)
+
+在 Linux/macOS 上，项目可以用另一个 Unix 用户身份启动 Agent，从而在操作系统层面实现文件系统隔离。目前 Claude Code 已支持。
+
+```toml
+[[projects]]
+name = "claude-sandboxed"
+run_as_user = "partseeker-coder"
+run_as_env = ["PGSSLROOTCERT"]
+```
+
+目标用户需要：supervisor 对其配置免密 sudo、自身不拥有 sudo、对 `work_dir` 有读写权限、拥有自己的 `~/.claude/settings.json`。
+如果你通过 `claude.ai` OAuth 认证，请将目标用户的 `~/.claude/.credentials.json` 软链接到 supervisor 的副本以保持 token 同步 —— 详见[环境传播清单](./docs/usage.md#environment-propagation-what-moves-into-the-target-users-home)。
+完整设置说明见 [`docs/usage.md`](./docs/usage.md#running-agents-as-a-different-unix-user-run_as_user)。
+
+启动 cc-connect 之前，可用以下命令审核配置：
+
+```bash
+cc-connect doctor user-isolation
+```
+
+该命令会执行三项前置检查和一次隔离探测，报告目标用户能/不能读取的内容。如果任一检查失败或探测到跨用户泄漏，cc-connect 将拒绝启动。
+
+---
 
 ### 🔐 权限模式
 

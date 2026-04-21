@@ -219,6 +219,11 @@ type Engine struct {
 	showContextIndicator bool
 	replyFooterEnabled   bool
 
+	// When true, /list etc. only show sessions tracked by cc-connect,
+	// hiding sessions created by direct CLI usage in the same work_dir.
+	// Default false = show all sessions.
+	filterExternalSessions bool
+
 	// Multi-workspace mode
 	multiWorkspace    bool
 	baseDir           string
@@ -607,6 +612,13 @@ func (e *Engine) SetReplyFooterEnabled(show bool) {
 	e.replyFooterEnabled = show
 }
 
+// SetFilterExternalSessions controls whether /list, /switch, /delete, etc.
+// hide sessions created by direct CLI usage in the same work_dir.
+// Default false = show all sessions from the agent.
+func (e *Engine) SetFilterExternalSessions(v bool) {
+	e.filterExternalSessions = v
+}
+
 func (e *Engine) SetWebSetupFunc(fn func() (int, string, bool, error)) { e.webSetupFunc = fn }
 func (e *Engine) SetWebStatusFunc(fn func() string)                    { e.webStatusFunc = fn }
 
@@ -720,6 +732,11 @@ func (e *Engine) SetConfigReloadFunc(fn func() (*ConfigReloadResult, error)) {
 // GetAgent returns the engine's agent (for type assertions like ProviderSwitcher).
 func (e *Engine) GetAgent() Agent {
 	return e.agent
+}
+
+// GetSessions returns the Engine's session manager (for testing).
+func (e *Engine) GetSessions() *SessionManager {
+	return e.sessions
 }
 
 // AddCommand registers a custom slash command.
@@ -2597,6 +2614,10 @@ func (e *Engine) getOrCreateInteractiveStateWith(sessionKey string, p Platform, 
 
 	if newID := agentSession.CurrentSessionID(); newID != "" {
 		if session.CompareAndSetAgentSessionID(newID, agent.Name()) {
+			pendingName := session.GetName()
+			if pendingName != "" && pendingName != "session" && pendingName != "default" {
+				sessions.SetSessionName(newID, pendingName)
+			}
 			sessions.Save()
 		}
 	}
@@ -3091,7 +3112,12 @@ func (e *Engine) processInteractiveEvents(state *interactiveState, session *Sess
 			// to not be persisted to disk, breaking session resume on next startup.
 			if state != nil && state.agentSession != nil {
 				if currentID := state.agentSession.CurrentSessionID(); currentID != "" {
-					session.SetAgentSessionID(currentID, e.agent.Name())
+					if session.CompareAndSetAgentSessionID(currentID, e.agent.Name()) {
+						pendingName := session.GetName()
+						if pendingName != "" && pendingName != "session" && pendingName != "default" {
+							sessions.SetSessionName(currentID, pendingName)
+						}
+					}
 					sessions.Save()
 				}
 			}
@@ -4053,13 +4079,31 @@ func (e *Engine) cmdNew(p Platform, msg *Message, args []string) {
 	}
 }
 
-// filterOwnedSessions is a pass-through: we want /list, /switch, /delete, /search
-// to show every Claude session JSONL in the work_dir, not just the ones spawned
-// via cc-connect. Upstream added ownership filtering in #569 to hide terminal CLI
-// sessions; our fork keeps them visible because the user treats all sessions as
-// their own regardless of entry point.
-func filterOwnedSessions(sessions []AgentSessionInfo, _ map[string]struct{}) []AgentSessionInfo {
-	return sessions
+// applySessionFilter conditionally filters agent sessions based on the
+// filter_external_sessions config. When disabled (default), all sessions are
+// returned. When enabled, only sessions tracked by cc-connect are shown.
+func (e *Engine) applySessionFilter(sessions []AgentSessionInfo, sm *SessionManager) []AgentSessionInfo {
+	if !e.filterExternalSessions {
+		return sessions
+	}
+	return filterOwnedSessions(sessions, sm.KnownAgentSessionIDs())
+}
+
+// filterOwnedSessions removes agent sessions that are not tracked by cc-connect's
+// session manager. This prevents external CLI sessions in the same work_dir from
+// appearing in /list, /switch, /delete, etc. If the session manager has no tracked
+// agent sessions at all (e.g. first run), all sessions are returned unfiltered.
+func filterOwnedSessions(sessions []AgentSessionInfo, known map[string]struct{}) []AgentSessionInfo {
+	if len(known) == 0 {
+		return sessions
+	}
+	filtered := make([]AgentSessionInfo, 0, len(sessions))
+	for _, s := range sessions {
+		if _, ok := known[s.ID]; ok {
+			filtered = append(filtered, s)
+		}
+	}
+	return filtered
 }
 
 const listPageSize = 20
@@ -4080,7 +4124,7 @@ func (e *Engine) cmdList(p Platform, msg *Message, args []string) {
 			e.reply(p, msg.ReplyCtx, fmt.Sprintf(e.i18n.T(MsgListError), err))
 			return
 		}
-		agentSessions = filterOwnedSessions(agentSessions, sessions.KnownAgentSessionIDs())
+		agentSessions = e.applySessionFilter(agentSessions, sessions)
 		if len(agentSessions) == 0 {
 			e.reply(p, msg.ReplyCtx, e.i18n.T(MsgListEmpty))
 			return
@@ -4177,20 +4221,9 @@ func (e *Engine) cmdSwitch(p Platform, msg *Message, args []string) {
 		e.reply(p, msg.ReplyCtx, e.i18n.Tf(MsgError, err))
 		return
 	}
+	agentSessions = e.applySessionFilter(agentSessions, sessions)
 
-	// Full session-ID match bypasses the ownership filter so users can
-	// recover an orphaned session by pasting its full UUID.
-	var matched *AgentSessionInfo
-	for i := range agentSessions {
-		if agentSessions[i].ID == query {
-			matched = &agentSessions[i]
-			break
-		}
-	}
-	if matched == nil {
-		owned := filterOwnedSessions(agentSessions, sessions.KnownAgentSessionIDs())
-		matched = e.matchSession(owned, sessions, query)
-	}
+	matched := e.matchSession(agentSessions, sessions, query)
 	if matched == nil {
 		e.reply(p, msg.ReplyCtx, fmt.Sprintf(e.i18n.T(MsgSwitchNoMatch), query))
 		return
@@ -4939,7 +4972,7 @@ func (e *Engine) cmdSearch(p Platform, msg *Message, args []string) {
 		e.reply(p, msg.ReplyCtx, fmt.Sprintf(e.i18n.T(MsgSearchError), err))
 		return
 	}
-	agentSessions = filterOwnedSessions(agentSessions, sessions.KnownAgentSessionIDs())
+	agentSessions = e.applySessionFilter(agentSessions, sessions)
 
 	type searchResult struct {
 		id           string
@@ -5033,7 +5066,7 @@ func (e *Engine) cmdName(p Platform, msg *Message, args []string) {
 			e.reply(p, msg.ReplyCtx, e.i18n.Tf(MsgError, err))
 			return
 		}
-		agentSessions = filterOwnedSessions(agentSessions, sessions.KnownAgentSessionIDs())
+		agentSessions = e.applySessionFilter(agentSessions, sessions)
 		if idx > len(agentSessions) {
 			e.reply(p, msg.ReplyCtx, fmt.Sprintf(e.i18n.T(MsgSwitchNoSession), idx))
 			return
@@ -7029,6 +7062,17 @@ func (e *Engine) cmdProviderRemove(p Platform, msg *Message, switcher ProviderSw
 	e.reply(p, msg.ReplyCtx, fmt.Sprintf(e.i18n.T(MsgProviderRemoved), name))
 }
 
+// resetAllSessions resets the agent session ID and clears history for all
+// active sessions. Used when the provider changes via the management API
+// (where there is no single session key context).
+func (e *Engine) resetAllSessions() {
+	for _, s := range e.sessions.AllSessions() {
+		s.SetAgentSessionID("", "")
+		s.ClearHistory()
+	}
+	e.sessions.Save()
+}
+
 func (e *Engine) switchProvider(p Platform, msg *Message, switcher ProviderSwitcher, name string) {
 	if !switcher.SetActiveProvider(name) {
 		e.reply(p, msg.ReplyCtx, fmt.Sprintf(e.i18n.T(MsgProviderNotFound), name))
@@ -8123,7 +8167,7 @@ func (e *Engine) executeCardAction(cmd, args, sessionKey string) {
 		if err != nil || len(agentSessions) == 0 {
 			return
 		}
-		agentSessions = filterOwnedSessions(agentSessions, sessions.KnownAgentSessionIDs())
+		agentSessions = e.applySessionFilter(agentSessions, sessions)
 		matched := e.matchSession(agentSessions, sessions, args)
 		if matched == nil {
 			return
@@ -8276,7 +8320,7 @@ func (e *Engine) renderDeleteModeCard(sessionKey string) *Card {
 	if err != nil {
 		return e.simpleCard(e.i18n.T(MsgDeleteModeTitle), "red", err.Error())
 	}
-	agentSessions = filterOwnedSessions(agentSessions, sessions.KnownAgentSessionIDs())
+	agentSessions = e.applySessionFilter(agentSessions, sessions)
 	dm := e.getDeleteModeState(sessionKey)
 	if dm == nil {
 		return e.simpleCard(e.i18n.T(MsgDeleteModeTitle), "red", e.i18n.T(MsgDeleteUsage))
@@ -8647,7 +8691,7 @@ func (e *Engine) submitDeleteModeSelection(sessionKey string, selectedIDs map[st
 	if err != nil {
 		return []string{e.i18n.Tf(MsgError, err)}
 	}
-	agentSessions = filterOwnedSessions(agentSessions, sessions.KnownAgentSessionIDs())
+	agentSessions = e.applySessionFilter(agentSessions, sessions)
 	seen := make(map[string]struct{}, len(agentSessions))
 	lines := make([]string, 0, len(selectedIDs))
 	for i := range agentSessions {
@@ -8859,7 +8903,7 @@ func (e *Engine) renderListCard(sessionKey string, page int) (*Card, error) {
 	if err != nil {
 		return nil, fmt.Errorf(e.i18n.T(MsgListError), err)
 	}
-	agentSessions = filterOwnedSessions(agentSessions, sessions.KnownAgentSessionIDs())
+	agentSessions = e.applySessionFilter(agentSessions, sessions)
 	if len(agentSessions) == 0 {
 		return e.simpleCard(e.i18n.Tf(MsgCardTitleSessions, agent.Name(), 0), "turquoise", e.i18n.T(MsgListEmpty)), nil
 	}
@@ -10880,7 +10924,7 @@ func (e *Engine) cmdDelete(p Platform, msg *Message, args []string) {
 		e.reply(p, msg.ReplyCtx, e.i18n.Tf(MsgError, err))
 		return
 	}
-	agentSessions = filterOwnedSessions(agentSessions, sessions.KnownAgentSessionIDs())
+	agentSessions = e.applySessionFilter(agentSessions, sessions)
 
 	prefix := strings.TrimSpace(args[0])
 	if isExplicitDeleteBatchArg(prefix) {
@@ -11223,8 +11267,14 @@ func (e *Engine) HandleRelay(ctx context.Context, fromProject, chatID, message s
 		}
 	}
 
-	if session.CompareAndSetAgentSessionID(agentSession.CurrentSessionID(), e.agent.Name()) {
-		e.sessions.Save()
+	if newID := agentSession.CurrentSessionID(); newID != "" {
+		if session.CompareAndSetAgentSessionID(newID, e.agent.Name()) {
+			pendingName := session.GetName()
+			if pendingName != "" && pendingName != "session" && pendingName != "default" {
+				e.sessions.SetSessionName(newID, pendingName)
+			}
+			e.sessions.Save()
+		}
 	}
 
 	if err := agentSession.Send(message, nil, nil); err != nil {
@@ -11241,6 +11291,10 @@ func (e *Engine) HandleRelay(ctx context.Context, fromProject, chatID, message s
 			}
 			if event.SessionID != "" {
 				if session.CompareAndSetAgentSessionID(event.SessionID, e.agent.Name()) {
+					pendingName := session.GetName()
+					if pendingName != "" && pendingName != "session" && pendingName != "default" {
+						e.sessions.SetSessionName(event.SessionID, pendingName)
+					}
 					e.sessions.Save()
 				}
 			}
@@ -11259,7 +11313,12 @@ func (e *Engine) HandleRelay(ctx context.Context, fromProject, chatID, message s
 		case EventResult:
 			// Use agentSession.CurrentSessionID() for the same reason as above.
 			if currentID := agentSession.CurrentSessionID(); currentID != "" {
-				session.SetAgentSessionID(currentID, e.agent.Name())
+				if session.CompareAndSetAgentSessionID(currentID, e.agent.Name()) {
+					pendingName := session.GetName()
+					if pendingName != "" && pendingName != "session" && pendingName != "default" {
+						e.sessions.SetSessionName(currentID, pendingName)
+					}
+				}
 				e.sessions.Save()
 			}
 			resp := event.Content
