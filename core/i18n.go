@@ -439,8 +439,10 @@ const (
 	MsgCommandDisabled   MsgKey = "command_disabled"
 	MsgAdminRequired     MsgKey = "admin_required"
 	MsgRateLimited       MsgKey = "rate_limited"
-	MsgBtwSent       MsgKey = "btw_sent"
-	MsgBtwSendFailed MsgKey = "btw_send_failed"
+	MsgPsSent       MsgKey = "ps_sent"
+	MsgPsSendFailed MsgKey = "ps_send_failed"
+	MsgPsEmpty      MsgKey = "ps_empty"
+	MsgPsNoSession  MsgKey = "ps_no_session"
 
 	MsgWhoamiTitle     MsgKey = "whoami_title"
 	MsgWhoamiCardTitle MsgKey = "whoami_card_title"
@@ -644,11 +646,11 @@ var messages = map[MsgKey]map[Language]string{
 		LangSpanish:            "No hay ejecución en progreso.",
 	},
 	MsgPreviousProcessing: {
-		LangEnglish:            "⏳ Previous request still processing. Use `/btw <message>` to add context to the current turn.",
-		LangChinese:            "⏳ 上一个请求仍在处理中。使用 `/btw <消息>` 可向当前轮次追加上下文。",
-		LangTraditionalChinese: "⏳ 上一個請求仍在處理中。使用 `/btw <訊息>` 可向當前輪次追加上下文。",
-		LangJapanese:           "⏳ 前のリクエストを処理中です。`/btw <メッセージ>` で現在のターンにコンテキストを追加できます。",
-		LangSpanish:            "⏳ La solicitud anterior aún se está procesando. Use `/btw <mensaje>` para agregar contexto al turno actual.",
+		LangEnglish:            "⏳ Previous request still processing. Use `/ps <message>` to add context to the current turn.",
+		LangChinese:            "⏳ 上一个请求仍在处理中。使用 `/ps <消息>` 可向当前轮次追加上下文。",
+		LangTraditionalChinese: "⏳ 上一個請求仍在處理中。使用 `/ps <訊息>` 可向當前輪次追加上下文。",
+		LangJapanese:           "⏳ 前のリクエストを処理中です。`/ps <メッセージ>` で現在のターンにコンテキストを追加できます。",
+		LangSpanish:            "⏳ La solicitud anterior aún se está procesando. Use `/ps <mensaje>` para agregar contexto al turno actual.",
 	},
 	MsgMessageQueued: {
 		LangEnglish:            "📬 Message received — will process after the current task finishes.",
@@ -3016,19 +3018,33 @@ var messages = map[MsgKey]map[Language]string{
 		LangJapanese:           "⏳ メッセージの送信が速すぎます。しばらくお待ちください。",
 		LangSpanish:            "⏳ Estás enviando mensajes demasiado rápido. Espera un momento.",
 	},
-	MsgBtwSent: {
+	MsgPsSent: {
 		LangEnglish:            "✅ Message injected into the current session.",
 		LangChinese:            "✅ 消息已注入当前会话。",
 		LangTraditionalChinese: "✅ 訊息已注入目前會話。",
 		LangJapanese:           "✅ メッセージを現在のセッションに注入しました。",
 		LangSpanish:            "✅ Mensaje inyectado en la sesión actual.",
 	},
-	MsgBtwSendFailed: {
+	MsgPsSendFailed: {
 		LangEnglish:            "❌ Failed to inject message into the current session.",
 		LangChinese:            "❌ 消息注入当前会话失败。",
 		LangTraditionalChinese: "❌ 訊息注入目前會話失敗。",
 		LangJapanese:           "❌ 現在のセッションへのメッセージ注入に失敗しました。",
 		LangSpanish:            "❌ Error al inyectar el mensaje en la sesión actual.",
+	},
+	MsgPsEmpty: {
+		LangEnglish:            "Usage: `/ps <message>`",
+		LangChinese:            "用法：`/ps <消息>`",
+		LangTraditionalChinese: "用法：`/ps <訊息>`",
+		LangJapanese:           "使い方：`/ps <メッセージ>`",
+		LangSpanish:            "Uso: `/ps <mensaje>`",
+	},
+	MsgPsNoSession: {
+		LangEnglish:            "No task is currently running.",
+		LangChinese:            "当前没有正在执行的任务。",
+		LangTraditionalChinese: "目前沒有正在執行的任務。",
+		LangJapanese:           "現在実行中のタスクはありません。",
+		LangSpanish:            "No hay ninguna tarea en ejecución.",
 	},
 	MsgWhoamiTitle: {
 		LangEnglish:            "🪪 **Your Identity**",

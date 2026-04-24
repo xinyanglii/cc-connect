@@ -21,7 +21,7 @@ The Slack platform was added in commit `eaec71f` with basic functionality:
 ### 2. Slash Command Support
 - Handle `socketmode.EventTypeSlashCommand` events
 - Converts Slack `/command` to engine command format
-- Enables native `/btw`, `/new`, `/stop`, etc. from Slack
+- Enables native `/ps`, `/new`, `/stop`, etc. from Slack
 - Commits: `81c6aec`, `2bd8518`
 
 ### 3. Multi-Workspace / Shared Sessions

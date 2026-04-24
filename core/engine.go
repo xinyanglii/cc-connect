@@ -26,7 +26,21 @@ import (
 const maxPlatformMessageLen = 4000
 
 const telegramBotCommandLimit = 100
-const maxQueuedMessages = 5 // cap queued messages to bound memory usage
+
+// maxQueuedMessages caps queued messages per session to bound memory. Default
+// 5; process-wide override via Engine.SetMaxQueuedMessages (upstream v1.3.3+
+// config.Queue.MaxDepth wiring — kept package-level here because integration/v1
+// has a single Engine per process and this avoids a struct-field refactor).
+var maxQueuedMessages = 5
+
+// SetMaxQueuedMessages sets the per-session message queue depth. Values <= 0
+// are ignored. Matches upstream v1.3.3 API (cmd/cc-connect/main.go wires
+// cfg.Queue.MaxDepth through here).
+func (e *Engine) SetMaxQueuedMessages(n int) {
+	if n > 0 {
+		maxQueuedMessages = n
+	}
+}
 
 const (
 	defaultThinkingMaxLen = 300
@@ -1717,65 +1731,8 @@ func (e *Engine) handleMessage(p Platform, msg *Message) {
 	session := sessions.GetOrCreateActive(msg.SessionKey)
 	sessions.UpdateUserMeta(msg.SessionKey, msg.UserName, msg.ChatName)
 	if !session.TryLock() {
-		// Session is busy. Two behaviors based on prefix:
-		//   /btw <text>  → mid-turn inject (merges into current turn, Claude
-		//                  CLI treats it as a side-note during the response)
-		//   <other text> → queued to process as a fresh next turn
-		//
-		// Rationale: Claude CLI emits ONE EventResult per turn regardless of
-		// how many user messages were sent during that turn — so default
-		// inject caused N sends → 1 result, leading to mis-addressed
-		// replies. /btw is the explicit mid-turn inject without result
-		// bookkeeping; queued messages run as fresh turns.
-		trimmed := strings.TrimSpace(content)
-		if isBtwCommand(trimmed) {
-			injectContent := strings.TrimSpace(trimmed[len(matchBtwPrefix(trimmed)):])
-			if injectContent == "" {
-				return
-			}
-			e.interactiveMu.Lock()
-			state, ok := e.interactiveStates[interactiveKey]
-			e.interactiveMu.Unlock()
-
-			if !ok || state == nil || state.agentSession == nil || !state.agentSession.Alive() {
-				if e.queueMessageForBusySession(p, msg, interactiveKey) {
-					if session.TryLock() {
-						go e.drainOrphanedQueue(session, sessions, interactiveKey, agent, resolvedWorkspace)
-					}
-					return
-				}
-				e.reply(p, msg.ReplyCtx, e.i18n.T(MsgPreviousProcessing))
-				return
-			}
-
-			// Auto-deny pending permission so the injected message takes priority.
-			state.mu.Lock()
-			if state.pending != nil {
-				pendingReq := state.pending
-				state.pending = nil
-				state.mu.Unlock()
-				_ = state.agentSession.RespondPermission(pendingReq.RequestID, PermissionResult{
-					Behavior: "deny",
-					Message:  "Superseded by /btw",
-				})
-				close(pendingReq.Resolved)
-			} else {
-				state.mu.Unlock()
-			}
-
-			if err := state.agentSession.Send(injectContent, msg.Images, msg.Files); err != nil {
-				slog.Error("btw inject failed", "error", err)
-				e.reply(p, msg.ReplyCtx, e.i18n.T(MsgBtwSendFailed))
-				return
-			}
-			// Visible ack — simple text reply user sees immediately.
-			// Matches the pre-fork "✅ 消息已注入" behavior.
-			e.reply(p, msg.ReplyCtx, e.i18n.T(MsgBtwSent))
-			slog.Info("btw injected (merged into current turn)", "session", msg.SessionKey)
-			return
-		}
-
-		// Non-/btw busy-path message: queue for next turn.
+		// Session is busy — queue message for next turn.
+		// /ps handling moved to cmdPs (handleCommand path runs before TryLock).
 		if e.queueMessageForBusySession(p, msg, interactiveKey) {
 			if session.TryLock() {
 				go e.drainOrphanedQueue(session, sessions, interactiveKey, agent, resolvedWorkspace)
@@ -3568,26 +3525,7 @@ var builtinCommands = []struct {
 	{[]string{"whoami", "myid"}, "whoami"},
 	{[]string{"web"}, "web"},
 	{[]string{"diff"}, "diff"},
-}
-
-// isBtwCommand checks if a trimmed message starts with a /btw command.
-func isBtwCommand(trimmed string) bool {
-	return matchBtwPrefix(trimmed) != ""
-}
-
-// matchBtwPrefix returns the prefix portion (e.g. "/btw ") if the
-// message starts with a btw command, or "" if it doesn't match.
-func matchBtwPrefix(trimmed string) string {
-	lower := strings.ToLower(trimmed)
-	for _, prefix := range []string{"/btw"} {
-		if strings.HasPrefix(lower, prefix) {
-			rest := trimmed[len(prefix):]
-			if rest == "" || rest[0] == ' ' {
-				return trimmed[:len(prefix)]
-			}
-		}
-	}
-	return ""
+	{[]string{"ps", "btw"}, "ps"},
 }
 
 // matchPrefix finds a unique command matching the given prefix.
@@ -3751,6 +3689,8 @@ func (e *Engine) handleCommand(p Platform, msg *Message, raw string) bool {
 		e.cmdShell(p, msg, raw)
 	case "diff":
 		e.cmdDiff(p, msg, raw)
+	case "ps":
+		e.cmdPs(p, msg, args)
 	case "show":
 		e.cmdShow(p, msg, args)
 	case "dir":
@@ -3796,17 +3736,6 @@ func (e *Engine) handleCommand(p Platform, msg *Message, raw string) bool {
 				"project", e.name, "command", skill.Name, "type", "skill")
 			e.executeSkill(p, msg, skill, args)
 			return true
-		}
-		// /btw is NOT a regular cc-connect command — it's a special prefix
-		// recognized later in the busy-path (handleMessage, via isBtwCommand)
-		// for mid-turn injection. Suppress the "unknown command" warning for it
-		// and fall through silently so the busy-path can catch it when the
-		// session is actually busy. When session is idle, the message falls
-		// through to normal agent processing (user sees /btw foo delivered
-		// to the agent verbatim; acceptable since idle /btw has no injection
-		// target anyway).
-		if cmd == "btw" {
-			return false
 		}
 		// Not a cc-connect command — notify user, then fall through to agent
 		e.send(p, msg.ReplyCtx, fmt.Sprintf(e.i18n.T(MsgUnknownCommand), "/"+cmd))
@@ -4759,6 +4688,73 @@ func (e *Engine) cmdDiff(p Platform, msg *Message, raw string) {
 		}
 		e.reply(p, msg.ReplyCtx, "```diff\n"+result+"\n```")
 	}()
+}
+
+// cmdPs injects a message into the running interactive session (fka /btw).
+// Modeled on upstream v1.3.3 cmdPs but with three fork enhancements:
+//  1. Auto-deny any pending permission prompt so the injected message takes priority.
+//  2. Pass msg.Images and msg.Files through to the agent (upstream sends nil, nil).
+//  3. Queue fallback: if the agent process is dead, queue the message for the next
+//     turn via queueMessageForBusySession instead of just replying MsgPsNoSession.
+func (e *Engine) cmdPs(p Platform, msg *Message, args []string) {
+	text := strings.TrimSpace(strings.Join(args, " "))
+	if text == "" {
+		e.reply(p, msg.ReplyCtx, e.i18n.T(MsgPsEmpty))
+		return
+	}
+
+	iKey := e.interactiveKeyForSessionKey(msg.SessionKey)
+
+	e.interactiveMu.Lock()
+	state, ok := e.interactiveStates[iKey]
+	e.interactiveMu.Unlock()
+
+	if !ok || state == nil || state.agentSession == nil || !state.agentSession.Alive() {
+		// Fork enhancement 3: queue fallback. queueMessageForBusySession is
+		// self-contained (uses interactiveMu internally) so it is safe to
+		// call here without holding any session lock.
+		if e.queueMessageForBusySession(p, msg, iKey) {
+			return
+		}
+		e.reply(p, msg.ReplyCtx, e.i18n.T(MsgPsNoSession))
+		return
+	}
+
+	// Fork enhancement 1: auto-deny pending permission.
+	// The captured pendingReq is safe to resolve even if state.pending is
+	// reassigned concurrently — pendingPermission.resolve() is guarded by
+	// sync.Once (see resolve() above).
+	state.mu.Lock()
+	if state.pending != nil {
+		pendingReq := state.pending
+		state.pending = nil
+		state.mu.Unlock()
+		_ = state.agentSession.RespondPermission(pendingReq.RequestID, PermissionResult{
+			Behavior: "deny",
+			Message:  "Superseded by /ps",
+		})
+		pendingReq.resolve()
+	} else {
+		state.mu.Unlock()
+	}
+
+	// Fork enhancement 2: images/files passthrough.
+	if err := state.agentSession.Send(text, msg.Images, msg.Files); err != nil {
+		slog.Error("ps: send failed",
+			"error", err,
+			"session", msg.SessionKey,
+			"interactive_key", iKey)
+		e.reply(p, msg.ReplyCtx, e.i18n.T(MsgPsSendFailed))
+		return
+	}
+
+	e.reply(p, msg.ReplyCtx, e.i18n.T(MsgPsSent))
+	slog.Info("ps injected",
+		"session", msg.SessionKey,
+		"interactive_key", iKey,
+		"text_len", len(text),
+		"has_images", len(msg.Images) > 0,
+		"has_files", len(msg.Files) > 0)
 }
 
 func (e *Engine) diff2html(ctx context.Context, diff []byte, workDir, title string) ([]byte, error) {
@@ -5872,6 +5868,7 @@ func helpCardGroups() []helpCardGroup {
 				{command: "/skills", action: "nav:/skills"},
 				{command: "/compress", action: "cmd:/compress"},
 				{command: "/stop", action: "act:/stop"},
+				{command: "/ps", action: "cmd:/ps"},
 			},
 		},
 		{

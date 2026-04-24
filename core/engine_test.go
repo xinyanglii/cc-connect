@@ -10576,3 +10576,344 @@ func TestSessionName_ACPLikeFlow(t *testing.T) {
 			"acp-session-001", gotName, "ACP任务")
 	}
 }
+
+// --- cmdPs test stubs + tests ---
+
+// psTestSession records Send and RespondPermission calls for cmdPs tests.
+type psTestSession struct {
+	sessionID    string
+	alive        bool
+	sendMu       sync.Mutex
+	sendText     []string
+	sendImages   [][]ImageAttachment
+	sendFiles    [][]FileAttachment
+	sendErr      error
+	permMu       sync.Mutex
+	permCalls    []PermissionResult
+	permRequests []string
+}
+
+func newPsTestSession() *psTestSession { return &psTestSession{sessionID: "ps-test", alive: true} }
+
+func (s *psTestSession) Send(prompt string, imgs []ImageAttachment, files []FileAttachment) error {
+	s.sendMu.Lock()
+	s.sendText = append(s.sendText, prompt)
+	s.sendImages = append(s.sendImages, imgs)
+	s.sendFiles = append(s.sendFiles, files)
+	err := s.sendErr
+	s.sendMu.Unlock()
+	return err
+}
+func (s *psTestSession) RespondPermission(id string, res PermissionResult) error {
+	s.permMu.Lock()
+	s.permRequests = append(s.permRequests, id)
+	s.permCalls = append(s.permCalls, res)
+	s.permMu.Unlock()
+	return nil
+}
+func (s *psTestSession) Events() <-chan Event       { return make(chan Event) }
+func (s *psTestSession) CurrentSessionID() string   { return s.sessionID }
+func (s *psTestSession) Alive() bool                { return s.alive }
+func (s *psTestSession) Close() error               { s.alive = false; return nil }
+
+func (s *psTestSession) sends() []string {
+	s.sendMu.Lock()
+	defer s.sendMu.Unlock()
+	out := make([]string, len(s.sendText))
+	copy(out, s.sendText)
+	return out
+}
+
+// TestBtwAlias_ResolvesToPs verifies /btw is an alias for /ps.
+// Copied from upstream fc793071.
+func TestBtwAlias_ResolvesToPs(t *testing.T) {
+	if id := matchPrefix("btw", builtinCommands); id != "ps" {
+		t.Errorf("matchPrefix(%q) = %q, want %q", "btw", id, "ps")
+	}
+	if id := matchPrefix("ps", builtinCommands); id != "ps" {
+		t.Errorf("matchPrefix(%q) = %q, want %q", "ps", id, "ps")
+	}
+}
+
+// TestHelpCard_ContainsPs guards against accidental removal of /ps from the help card.
+func TestHelpCard_ContainsPs(t *testing.T) {
+	groups := helpCardGroups()
+	for _, g := range groups {
+		for _, item := range g.items {
+			if item.command == "/ps" {
+				return
+			}
+		}
+	}
+	t.Fatal("helpCardGroups() does not contain /ps")
+}
+
+// TestCmdPs_Empty verifies empty args yield MsgPsEmpty.
+func TestCmdPs_Empty(t *testing.T) {
+	p := &stubPlatformEngine{n: "test"}
+	e := NewEngine("test", &stubAgent{}, []Platform{p}, "", LangEnglish)
+	e.cmdPs(p, &Message{SessionKey: "k", ReplyCtx: "ctx"}, []string{})
+	sent := p.getSent()
+	if len(sent) != 1 || sent[0] != e.i18n.T(MsgPsEmpty) {
+		t.Fatalf("sent = %v, want [MsgPsEmpty]", sent)
+	}
+}
+
+// TestCmdPs_NoSession verifies absence of interactive state falls through to
+// queueMessageForBusySession (pre-spawn queue) or MsgPsNoSession.
+func TestCmdPs_NoSession(t *testing.T) {
+	p := &stubPlatformEngine{n: "test"}
+	e := NewEngine("test", &stubAgent{}, []Platform{p}, "", LangEnglish)
+	// No interactiveState at all — queueMessageForBusySession requires an
+	// interactive state entry to queue into, so it returns false and cmdPs
+	// falls back to replying MsgPsNoSession.
+	e.cmdPs(p, &Message{SessionKey: "k", ReplyCtx: "ctx"}, []string{"hello"})
+	sent := p.getSent()
+	if len(sent) != 1 || sent[0] != e.i18n.T(MsgPsNoSession) {
+		t.Fatalf("sent = %v, want [MsgPsNoSession]", sent)
+	}
+}
+
+// TestCmdPs_IdlePath verifies /ps foo during idle session calls Send("foo", ...)
+// and does NOT deliver the literal "/ps foo" string (regression guard against
+// the pre-Plan-B idle-path bug).
+func TestCmdPs_IdlePath(t *testing.T) {
+	p := &stubPlatformEngine{n: "test"}
+	e := NewEngine("test", &stubAgent{}, []Platform{p}, "", LangEnglish)
+	sess := newPsTestSession()
+	key := "k"
+	e.interactiveMu.Lock()
+	e.interactiveStates[key] = &interactiveState{agentSession: sess, platform: p, replyCtx: "ctx"}
+	e.interactiveMu.Unlock()
+
+	e.cmdPs(p, &Message{SessionKey: key, ReplyCtx: "ctx"}, []string{"hello", "world"})
+
+	got := sess.sends()
+	if len(got) != 1 || got[0] != "hello world" {
+		t.Fatalf("Send calls = %v, want [\"hello world\"]", got)
+	}
+	if strings.Contains(got[0], "/ps") {
+		t.Fatalf("idle bug regression: Send text contains \"/ps\": %q", got[0])
+	}
+	sent := p.getSent()
+	if len(sent) != 1 || sent[0] != e.i18n.T(MsgPsSent) {
+		t.Fatalf("reply = %v, want [MsgPsSent]", sent)
+	}
+}
+
+// TestCmdPs_PassesImagesAndFiles verifies enhancement 2: msg.Images and
+// msg.Files are passed through to agentSession.Send (upstream hardcodes nil).
+func TestCmdPs_PassesImagesAndFiles(t *testing.T) {
+	p := &stubPlatformEngine{n: "test"}
+	e := NewEngine("test", &stubAgent{}, []Platform{p}, "", LangEnglish)
+	sess := newPsTestSession()
+	key := "k"
+	e.interactiveMu.Lock()
+	e.interactiveStates[key] = &interactiveState{agentSession: sess, platform: p, replyCtx: "ctx"}
+	e.interactiveMu.Unlock()
+
+	imgs := []ImageAttachment{{MimeType: "image/png", Data: []byte("img"), FileName: "a.png"}}
+	files := []FileAttachment{{MimeType: "text/plain", Data: []byte("doc"), FileName: "b.txt"}}
+	e.cmdPs(p, &Message{SessionKey: key, ReplyCtx: "ctx", Images: imgs, Files: files}, []string{"hi"})
+
+	if got := len(sess.sendImages); got != 1 || len(sess.sendImages[0]) != 1 || sess.sendImages[0][0].FileName != "a.png" {
+		t.Fatalf("images not passed through; sendImages = %+v", sess.sendImages)
+	}
+	if got := len(sess.sendFiles); got != 1 || len(sess.sendFiles[0]) != 1 || sess.sendFiles[0][0].FileName != "b.txt" {
+		t.Fatalf("files not passed through; sendFiles = %+v", sess.sendFiles)
+	}
+}
+
+// TestCmdPs_PendingPermissionAutoDenied verifies enhancement 1: when a
+// permission request is pending, /ps auto-denies it so the injection can
+// proceed.
+func TestCmdPs_PendingPermissionAutoDenied(t *testing.T) {
+	p := &stubPlatformEngine{n: "test"}
+	e := NewEngine("test", &stubAgent{}, []Platform{p}, "", LangEnglish)
+	sess := newPsTestSession()
+	key := "k"
+	pp := &pendingPermission{
+		RequestID: "req-1",
+		ToolName:  "bash",
+		Resolved:  make(chan struct{}),
+	}
+	e.interactiveMu.Lock()
+	e.interactiveStates[key] = &interactiveState{
+		agentSession: sess,
+		platform:     p,
+		replyCtx:     "ctx",
+		pending:      pp,
+	}
+	e.interactiveMu.Unlock()
+
+	e.cmdPs(p, &Message{SessionKey: key, ReplyCtx: "ctx"}, []string{"hi"})
+
+	sess.permMu.Lock()
+	calls := append([]PermissionResult(nil), sess.permCalls...)
+	ids := append([]string(nil), sess.permRequests...)
+	sess.permMu.Unlock()
+
+	if len(calls) != 1 || calls[0].Behavior != "deny" || ids[0] != "req-1" {
+		t.Fatalf("expected single deny on req-1, got ids=%v calls=%+v", ids, calls)
+	}
+	select {
+	case <-pp.Resolved:
+	default:
+		t.Fatal("pending.Resolved channel was not closed after auto-deny")
+	}
+	// Confirm state.pending was cleared
+	e.interactiveMu.Lock()
+	st := e.interactiveStates[key]
+	e.interactiveMu.Unlock()
+	st.mu.Lock()
+	remaining := st.pending
+	st.mu.Unlock()
+	if remaining != nil {
+		t.Fatalf("state.pending was not cleared, got %+v", remaining)
+	}
+}
+
+// TestCmdPs_FallbackToQueueWhenSpawning verifies enhancement 3: when the
+// interactive state exists but the agent subprocess hasn't spawned yet
+// (agentSession == nil, e.g. session warm-up), the message is queued for
+// the next turn via queueMessageForBusySession (issue #565 pre-spawn queue).
+func TestCmdPs_FallbackToQueueWhenSpawning(t *testing.T) {
+	p := &stubPlatformEngine{n: "test"}
+	e := NewEngine("test", &stubAgent{}, []Platform{p}, "", LangEnglish)
+	key := "k"
+	e.interactiveMu.Lock()
+	e.interactiveStates[key] = &interactiveState{agentSession: nil, platform: p, replyCtx: "ctx"}
+	e.interactiveMu.Unlock()
+
+	e.cmdPs(p, &Message{SessionKey: key, ReplyCtx: "ctx", Content: "/ps queued message"}, []string{"queued message"})
+
+	e.interactiveMu.Lock()
+	st := e.interactiveStates[key]
+	e.interactiveMu.Unlock()
+	st.mu.Lock()
+	queued := len(st.pendingMessages)
+	st.mu.Unlock()
+	if queued != 1 {
+		t.Fatalf("expected 1 queued message (pre-spawn fallback), got %d", queued)
+	}
+}
+
+// TestCmdPs_DeadAgentRepliesNoSession verifies that when agentSession exists
+// but has died, we reply MsgPsNoSession (queue explicitly refuses dead agents).
+func TestCmdPs_DeadAgentRepliesNoSession(t *testing.T) {
+	p := &stubPlatformEngine{n: "test"}
+	e := NewEngine("test", &stubAgent{}, []Platform{p}, "", LangEnglish)
+	sess := newPsTestSession()
+	sess.alive = false
+	key := "k"
+	e.interactiveMu.Lock()
+	e.interactiveStates[key] = &interactiveState{agentSession: sess, platform: p, replyCtx: "ctx"}
+	e.interactiveMu.Unlock()
+
+	e.cmdPs(p, &Message{SessionKey: key, ReplyCtx: "ctx"}, []string{"hi"})
+
+	sent := p.getSent()
+	if len(sent) != 1 || sent[0] != e.i18n.T(MsgPsNoSession) {
+		t.Fatalf("sent = %v, want [MsgPsNoSession]", sent)
+	}
+}
+
+// TestCmdPs_PassesImagesOnly / FilesOnly verify asymmetric attachment paths.
+func TestCmdPs_PassesImagesOnly(t *testing.T) {
+	p := &stubPlatformEngine{n: "test"}
+	e := NewEngine("test", &stubAgent{}, []Platform{p}, "", LangEnglish)
+	sess := newPsTestSession()
+	key := "k"
+	e.interactiveMu.Lock()
+	e.interactiveStates[key] = &interactiveState{agentSession: sess, platform: p, replyCtx: "ctx"}
+	e.interactiveMu.Unlock()
+
+	imgs := []ImageAttachment{{MimeType: "image/png", Data: []byte("x"), FileName: "a.png"}}
+	e.cmdPs(p, &Message{SessionKey: key, ReplyCtx: "ctx", Images: imgs}, []string{"look"})
+
+	if len(sess.sendImages) != 1 || len(sess.sendImages[0]) != 1 {
+		t.Fatalf("images not passed; sendImages = %+v", sess.sendImages)
+	}
+	if len(sess.sendFiles) != 1 || len(sess.sendFiles[0]) != 0 {
+		t.Fatalf("expected empty files slice, got %+v", sess.sendFiles)
+	}
+}
+
+func TestCmdPs_PassesFilesOnly(t *testing.T) {
+	p := &stubPlatformEngine{n: "test"}
+	e := NewEngine("test", &stubAgent{}, []Platform{p}, "", LangEnglish)
+	sess := newPsTestSession()
+	key := "k"
+	e.interactiveMu.Lock()
+	e.interactiveStates[key] = &interactiveState{agentSession: sess, platform: p, replyCtx: "ctx"}
+	e.interactiveMu.Unlock()
+
+	files := []FileAttachment{{MimeType: "text/plain", Data: []byte("x"), FileName: "b.txt"}}
+	e.cmdPs(p, &Message{SessionKey: key, ReplyCtx: "ctx", Files: files}, []string{"read"})
+
+	if len(sess.sendFiles) != 1 || len(sess.sendFiles[0]) != 1 {
+		t.Fatalf("files not passed; sendFiles = %+v", sess.sendFiles)
+	}
+	if len(sess.sendImages) != 1 || len(sess.sendImages[0]) != 0 {
+		t.Fatalf("expected empty images slice, got %+v", sess.sendImages)
+	}
+}
+
+// TestCmdPs_SendError verifies MsgPsSendFailed reply when agentSession.Send returns error.
+func TestCmdPs_SendError(t *testing.T) {
+	p := &stubPlatformEngine{n: "test"}
+	e := NewEngine("test", &stubAgent{}, []Platform{p}, "", LangEnglish)
+	sess := newPsTestSession()
+	sess.sendErr = errors.New("broken pipe")
+	key := "k"
+	e.interactiveMu.Lock()
+	e.interactiveStates[key] = &interactiveState{agentSession: sess, platform: p, replyCtx: "ctx"}
+	e.interactiveMu.Unlock()
+
+	e.cmdPs(p, &Message{SessionKey: key, ReplyCtx: "ctx"}, []string{"hi"})
+
+	sent := p.getSent()
+	if len(sent) != 1 || sent[0] != e.i18n.T(MsgPsSendFailed) {
+		t.Fatalf("sent = %v, want [MsgPsSendFailed]", sent)
+	}
+}
+
+// TestBtwAlias_EndToEnd verifies /btw <text> actually reaches cmdPs via handleCommand.
+func TestBtwAlias_EndToEnd(t *testing.T) {
+	p := &stubPlatformEngine{n: "test"}
+	e := NewEngine("test", &stubAgent{}, []Platform{p}, "", LangEnglish)
+	sess := newPsTestSession()
+	key := "k"
+	e.interactiveMu.Lock()
+	e.interactiveStates[key] = &interactiveState{agentSession: sess, platform: p, replyCtx: "ctx"}
+	e.interactiveMu.Unlock()
+
+	handled := e.handleCommand(p, &Message{SessionKey: key, ReplyCtx: "ctx"}, "/btw hello world")
+	if !handled {
+		t.Fatal("handleCommand did not handle /btw")
+	}
+	got := sess.sends()
+	if len(got) != 1 || got[0] != "hello world" {
+		t.Fatalf("Send calls via /btw = %v, want [\"hello world\"]", got)
+	}
+}
+
+// TestCmdPs_DisabledByRole verifies /ps honors disabledCmds (audit-log,
+// role-based disable — a free benefit from going through handleCommand).
+func TestCmdPs_DisabledByRole(t *testing.T) {
+	p := &stubPlatformEngine{n: "test"}
+	e := NewEngine("test", &stubAgent{}, []Platform{p}, "", LangEnglish)
+	e.disabledCmds = map[string]bool{"ps": true}
+
+	e.handleCommand(p, &Message{SessionKey: "k", ReplyCtx: "ctx"}, "/ps hello")
+
+	sent := p.getSent()
+	if len(sent) == 0 {
+		t.Fatal("expected a reply, got none")
+	}
+	if !strings.Contains(sent[0], "/ps") || !strings.Contains(sent[0], "disabled") {
+		// MsgCommandDisabled format: "Command %s is disabled."
+		// We only sanity-check structure; the exact string is locale-dependent.
+		t.Fatalf("reply does not look like MsgCommandDisabled for /ps: %q", sent[0])
+	}
+}
