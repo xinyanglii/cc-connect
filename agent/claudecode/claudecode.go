@@ -360,6 +360,7 @@ func (a *Agent) AvailableModels(ctx context.Context) []core.ModelOption {
 	return enrich([]core.ModelOption{
 		{Name: "sonnet", Desc: "Claude Sonnet 4 (balanced)"},
 		{Name: "opus", Desc: "Claude Opus 4 (most capable)"},
+		{Name: "opus[1m]", Desc: "Claude Opus (1M context, short alias)"},
 		{Name: "haiku", Desc: "Claude Haiku 3.5 (fastest)"},
 		{Name: "claude-opus-4-7[1m]", Desc: "Opus 4.7 (1M context)"},
 		{Name: "claude-sonnet-4-6[1m]", Desc: "Sonnet 4.6 (1M context)"},
