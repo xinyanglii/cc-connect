@@ -128,26 +128,27 @@ type AudioAttachment struct {
 
 // LocationAttachment represents a geographical location sent by the user.
 type LocationAttachment struct {
-	Latitude            float64 // latitude coordinate
-	Longitude           float64 // longitude coordinate
-	HorizontalAccuracy  float64 // accuracy radius in meters (optional)
-	LivePeriod          int     // time period for live location updates in seconds (optional)
-	Heading             int     // direction of movement in degrees (optional)
-	ProximityAlertRadius int    // maximum distance for proximity alerts in meters (optional)
+	Latitude             float64 // latitude coordinate
+	Longitude            float64 // longitude coordinate
+	HorizontalAccuracy   float64 // accuracy radius in meters (optional)
+	LivePeriod           int     // time period for live location updates in seconds (optional)
+	Heading              int     // direction of movement in degrees (optional)
+	ProximityAlertRadius int     // maximum distance for proximity alerts in meters (optional)
 }
 
 // Message represents a unified incoming message from any platform.
 type Message struct {
-	SessionKey string // unique key for user context, e.g. "feishu:{chatID}:{userID}"
-	Platform   string
-	MessageID  string // platform message ID for tracing
-	UserID     string
-	UserName   string
-	ChatName   string // human-readable chat/group name (optional)
-	Content    string
-	Images     []ImageAttachment // attached images (if any)
-	Files      []FileAttachment  // attached files (if any)
-	Audio        *AudioAttachment // voice message (if any)
+	SessionKey   string // unique key for user context, e.g. "feishu:{chatID}:{userID}"
+	Platform     string
+	MessageID    string // platform message ID for tracing
+	Recalled     bool   // true for platform message recall/delete events targeting MessageID
+	UserID       string
+	UserName     string
+	ChatName     string // human-readable chat/group name (optional)
+	Content      string
+	Images       []ImageAttachment   // attached images (if any)
+	Files        []FileAttachment    // attached files (if any)
+	Audio        *AudioAttachment    // voice message (if any)
 	Location     *LocationAttachment // geographical location (if any)
 	ExtraContent string              // platform-enriched content (e.g. location text, reply quote) prepended for the agent
 	ChannelKey   string              // platform-provided channel identifier for workspace binding (optional)
@@ -211,6 +212,8 @@ type Event struct {
 	Error        error
 	InputTokens  int // token usage from agent result events
 	OutputTokens int
+	Metadata     map[string]any // optional metadata from agent (e.g. compaction_continue)
+	Synthetic    bool           // true if this is a synthetic/generated message (not from real user)
 }
 
 // HistoryEntry is one turn in a conversation.

@@ -33,6 +33,12 @@
   <a href="./README.md">English</a> | <a href="./README.zh-CN.md">中文</a>
 </p>
 
+<p align="center">
+  <a href="https://trendshift.io/repositories/23266" target="_blank">
+    <img src="https://trendshift.io/api/badge/repositories/23266" alt="chenhg5/cc-connect | Trendshift" style="width: 250px; height: 55px;" width="250" height="55"/>
+  </a>
+</p>
+
 
 ## ❤️ 赞助
 
@@ -76,8 +82,38 @@
 </tr>
 
 <tr>
+<td width="150"><a href="https://cc.anyroute.io/register?aff=CR455DSQSKEV"><img src="assets/sponsors/anyrouteio.png" alt="AnyRoute.io" width="120"></a></td>
+<td>感谢 AnyRoute.io 对本项目的赞助！AnyRoute.io 是集 Claude Code、Codex 最新模型于一体、可靠稳定高效的 API 中转站，价格透明，最低低至官方 0.7 折，支持开票和企业高并发。通过 <a href="https://cc.anyroute.io/register?aff=CR455DSQSKEV">此链接</a> 注册即可开始使用。</td>
+</tr>
+
+<tr>
+<td width="150"><a href="https://aicanapi.com/register?aff=rIEy"><img src="assets/sponsors/aican.jpg" alt="aicanapi.com" width="120"></a></td>
+<td>感谢 aicanapi.com 对本项目的赞助！艾可API致力于为企业与开发者提供高性能、低延迟、可高并发承载的API接口服务。Claude Code 模型最低可达 1.6 折，其余模型普遍可享官方 2 折优惠，豆包 Seedance 2 真人生成服务支持免排队调用。选择艾可API，让企业级AI接口服务更简单、更高效、更具性价比。通过 <a href="https://aicanapi.com/register?aff=rIEy">此链接</a> 注册即可开始使用。</td>
+</tr>
+
+<tr>
+<td width="150"><a href="https://pateway.ai/?ch=2qn568&aff=DRA4VUFS"><img src="assets/sponsors/patewayai.png" alt="Pateway" width="120"></a></td>
+<td>感谢 Pateway 对本项目的赞助！PatewayAI 是面向重度 AI 开发者、专注官方直连的高品质模型 API 中转服务商。提供 Claude 全系列与 Codex 系列模型，100% 官方源直供，不掺假不注水。计费透明，Token 级账单可逐笔核验。支持企业级高并发，可签订正式合同并开具发票。通过 <a href="https://pateway.ai/?ch=2qn568&aff=DRA4VUFS">此链接</a> 注册即送 $3 试用额度，充值低至 6 折，邀请好友双向赠送，邀请奖励可达 $150！</td>
+</tr>
+
+<tr>
+<td width="150"><a href="https://cy.10dianai.com/register?aff=3FQn"><img src="assets/sponsors/10dianai.png" alt="10点AI" width="120"></a></td>
+<td>感谢 10点AI 对本项目的赞助！10dian-AI企业台是面向开发者与企业的 AI API 中转平台，聚合 GPT、Claude、Gemini、DeepSeek 等主流模型。针对生产环境专项优化，支持高并发稳定运行，有效规避接口抖动与超时问题。价格亲民性价比高、接口稳定不掉线、官方保真不参水。通过 <a href="https://cy.10dianai.com/register?aff=3FQn">此链接</a> 注册即送 ¥5 余额！</td>
+</tr>
+
+<tr>
 <td width="150"><a href="https://code0.ai/register?aff=5cGO"><img src="assets/sponsors/code0.svg" alt="Code0" width="120"></a></td>
 <td>感谢 Code0 对本项目的赞助！Code0 是面向中国开发者的 AI 模型聚合 API 中转服务，统一兼容 OpenAI / Anthropic / Gemini 三种协议格式，一个 Key 即可调用全量主流模型，稳定适配 Claude Code、Codex、Gemini CLI、cc-connect 等各类 Agent 工具。固定汇率计费：充值 1.5 元人民币 = 1 美元 API 额度，价格透明、国内直连、开箱即用。通过 <a href="https://code0.ai/register?aff=5cGO">此链接</a> 注册。</td>
+</tr>
+
+<tr>
+<td width="150"><a href="https://passport.compshare.cn/register?referral_code=H65IOClRGu5CM7nn5ykfad&ytag=GPU_YY_YX_git_cc-connect"><img src="assets/sponsors/youyunzhisuan.png" alt="优云智算" width="120"></a></td>
+<td>感谢优云智算赞助了本项目！优云智算是UCloud旗下AI云平台，提供稳定、全面的国内外模型API，仅一个key即可调用。主打包月、按次的高性价比国模Coding Plan套餐，同时提供官转稳定海外模型。支持接入 Claude Code、Codex 及 API 调用。支持企业高并发、7*24技术支持、自助开票。通过 <a href="https://passport.compshare.cn/register?referral_code=H65IOClRGu5CM7nn5ykfad&ytag=GPU_YY_YX_git_cc-connect">此链接</a> 注册的用户，可得免费5元平台体验金！</td>
+</tr>
+
+<tr>
+<td width="150"><a href="https://dragoncode.codes/register?ref=23ZELCPX"><img src="assets/sponsors/dragoncode.png" alt="DragonCode" width="120"></a></td>
+<td>感谢 DragonCode 对本项目的支持。DragonCode 为 cc-connect 用户准备了专属福利：通过 <a href="https://dragoncode.codes/register?ref=23ZELCPX">此链接</a> 注册即可开始体验。</td>
 </tr>
 
 <tr>
@@ -495,11 +531,9 @@ cc-connect send --file /absolute/path/to/report.pdf --image /absolute/path/to/ch
 感谢每一位支持这个项目的朋友。捐赠时留言你的 GitHub 用户名，我们会在这里展示！
 
 <!-- 捐赠者名单 -->
-<!--
-| GitHub 用户名 | 日期 |
-|-----------------|------|
-| @username | YYYY-MM-DD |
--->
+| 头像 | GitHub 用户名 | 日期 |
+|------|-----------------|------|
+| <img src="https://avatars.githubusercontent.com/u/1762560?v=4" width="40" height="40" style="border-radius: 50%;"> | [@thx0701](https://github.com/thx0701) | 2026-04-29 |
 
 
 ## 🤝 商业合作
