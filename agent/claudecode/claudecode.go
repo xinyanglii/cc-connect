@@ -496,6 +496,8 @@ func (a *Agent) StartSessionWithOptions(ctx context.Context, sessionID string, o
 	maxTok := a.maxContextTokens
 	model := a.model
 	effort := a.reasoningEffort
+	workDir := a.workDir
+	mode := a.mode
 	extraEnv := a.runtimeEnvLocked()
 
 	activeIdx := a.activeIdx
@@ -525,7 +527,7 @@ func (a *Agent) StartSessionWithOptions(ctx context.Context, sessionID string, o
 	streamPartial := a.streamPartial
 	a.mu.Unlock()
 
-	cs, err := newClaudeSession(ctx, a.workDir, a.cliBin, a.cliExtraArgs, a.cliArgsFlag, model, effort, sessionID, a.mode, systemPrompt, tools, disTools, extraEnv, platformPrompt, disableVerbose, streamPartial, a.spawnOpts, maxTok)
+	cs, err := newClaudeSession(ctx, workDir, a.cliBin, a.cliExtraArgs, a.cliArgsFlag, model, effort, sessionID, mode, systemPrompt, tools, disTools, extraEnv, platformPrompt, disableVerbose, streamPartial, a.spawnOpts, maxTok)
 	if err != nil {
 		return nil, err
 	}
@@ -543,7 +545,10 @@ func (a *Agent) ListSessions(ctx context.Context) ([]core.AgentSessionInfo, erro
 		return nil, fmt.Errorf("claudecode: cannot determine home dir: %w", err)
 	}
 
-	absWorkDir, err := filepath.Abs(a.workDir)
+	a.mu.RLock()
+	workDir := a.workDir
+	a.mu.RUnlock()
+	absWorkDir, err := filepath.Abs(workDir)
 	if err != nil {
 		return nil, fmt.Errorf("claudecode: resolve work_dir: %w", err)
 	}
@@ -596,7 +601,10 @@ func (a *Agent) DeleteSession(_ context.Context, sessionID string) error {
 	if err != nil {
 		return fmt.Errorf("claudecode: cannot determine home dir: %w", err)
 	}
-	absWorkDir, err := filepath.Abs(a.workDir)
+	a.mu.RLock()
+	workDir := a.workDir
+	a.mu.RUnlock()
+	absWorkDir, err := filepath.Abs(workDir)
 	if err != nil {
 		return fmt.Errorf("claudecode: resolve work_dir: %w", err)
 	}
@@ -661,7 +669,10 @@ func (a *Agent) GetSessionHistory(_ context.Context, sessionID string, limit int
 	if err != nil {
 		return nil, err
 	}
-	absWorkDir, _ := filepath.Abs(a.workDir)
+	a.mu.RLock()
+	workDir := a.workDir
+	a.mu.RUnlock()
+	absWorkDir, _ := filepath.Abs(workDir)
 	projectDir := findProjectDir(homeDir, absWorkDir)
 	if projectDir == "" {
 		return nil, fmt.Errorf("claudecode: project dir not found")
@@ -935,9 +946,12 @@ func (a *Agent) GetDisallowedTools() []string {
 // ── CommandProvider implementation ────────────────────────────
 
 func (a *Agent) CommandDirs() []string {
-	absDir, err := filepath.Abs(a.workDir)
+	a.mu.RLock()
+	workDir := a.workDir
+	a.mu.RUnlock()
+	absDir, err := filepath.Abs(workDir)
 	if err != nil {
-		absDir = a.workDir
+		absDir = workDir
 	}
 	dirs := []string{filepath.Join(absDir, ".claude", "commands")}
 	if home, err := os.UserHomeDir(); err == nil {
@@ -949,9 +963,12 @@ func (a *Agent) CommandDirs() []string {
 // ── SkillProvider implementation ──────────────────────────────
 
 func (a *Agent) SkillDirs() []string {
-	absDir, err := filepath.Abs(a.workDir)
+	a.mu.RLock()
+	workDir := a.workDir
+	a.mu.RUnlock()
+	absDir, err := filepath.Abs(workDir)
 	if err != nil {
-		absDir = a.workDir
+		absDir = workDir
 	}
 	return appendProjectClaudeSkillDirs(absDir, claudeConfigHomeDir())
 }
@@ -1045,9 +1062,12 @@ func uniqueSkillDirs(paths []string) []string {
 // ── MemoryFileProvider implementation ─────────────────────────
 
 func (a *Agent) ProjectMemoryFile() string {
-	absDir, err := filepath.Abs(a.workDir)
+	a.mu.RLock()
+	workDir := a.workDir
+	a.mu.RUnlock()
+	absDir, err := filepath.Abs(workDir)
 	if err != nil {
-		absDir = a.workDir
+		absDir = workDir
 	}
 	return filepath.Join(absDir, "CLAUDE.md")
 }
