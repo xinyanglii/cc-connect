@@ -1155,15 +1155,6 @@ func (e *Engine) ExecuteCronJob(job *CronJob) error {
 		}
 	}
 
-	// For non-muted cron jobs, wrap with delivery tracking to detect empty responses.
-	// This wrapper is created after the "⏰" notification so only actual agent responses
-	// are tracked.
-	var deliveryTracker *deliveryTrackingPlatform
-	if !job.Mute {
-		deliveryTracker = &deliveryTrackingPlatform{Platform: effectivePlatform}
-		effectivePlatform = deliveryTracker
-	}
-
 	if job.IsShellJob() {
 		return e.executeCronShell(effectivePlatform, replyCtx, job)
 	}
@@ -1240,10 +1231,15 @@ func (e *Engine) ExecuteCronJob(job *CronJob) error {
 		if workspaceDir != "" {
 			iKey = workspaceDir + ":" + iKey
 		}
+		prevHistLen := session.HistoryLen()
 		e.processInteractiveMessageWith(effectivePlatform, msg, session, agent, sessions, iKey, workspaceDir, runSessionKey)
 		e.cleanupInteractiveState(iKey)
-		// Check if any response was delivered for non-muted cron jobs
-		if deliveryTracker != nil && !deliveryTracker.wasDelivered() {
+		// Empty-response detection via session history delta: processInteractiveMessageWith
+		// always adds a "user" entry (prevHistLen+1), then an "assistant" entry on success
+		// (prevHistLen+2). This approach correctly detects empty responses across all
+		// delivery modes (plain text, cards, rich cards, DingTalk AI streaming) because
+		// AddHistory("assistant",...) is called before any platform-specific rendering path.
+		if !job.Mute && session.HistoryLen() < prevHistLen+2 {
 			return fmt.Errorf("cron job %q produced an empty response", job.ID)
 		}
 		return nil
@@ -1258,9 +1254,10 @@ func (e *Engine) ExecuteCronJob(job *CronJob) error {
 	if workspaceDir != "" {
 		iKey = workspaceDir + ":" + sessionKey
 	}
+	prevHistLen := session.HistoryLen()
 	e.processInteractiveMessageWith(effectivePlatform, msg, session, agent, sessions, iKey, workspaceDir, sessionKey)
-	// Check if any response was delivered for non-muted cron jobs
-	if deliveryTracker != nil && !deliveryTracker.wasDelivered() {
+	// Same empty-response detection as the useNewSession path above.
+	if !job.Mute && session.HistoryLen() < prevHistLen+2 {
 		return fmt.Errorf("cron job %q produced an empty response", job.ID)
 	}
 	return nil

@@ -173,6 +173,13 @@ func (s *Session) ClearHistory() {
 	s.History = nil
 }
 
+// HistoryLen returns the current number of history entries.
+func (s *Session) HistoryLen() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return len(s.History)
+}
+
 // GetHistory returns the last n entries. If n <= 0, returns all.
 func (s *Session) GetHistory(n int) []HistoryEntry {
 	s.mu.Lock()

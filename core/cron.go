@@ -705,40 +705,6 @@ type mutePlatform struct {
 func (m *mutePlatform) Reply(_ context.Context, _ any, _ string) error { return nil }
 func (m *mutePlatform) Send(_ context.Context, _ any, _ string) error  { return nil }
 
-// deliveryTrackingPlatform wraps a Platform and tracks whether any message
-// was successfully delivered via Reply or Send. Used by ExecuteCronJob to
-// detect empty responses.
-type deliveryTrackingPlatform struct {
-	Platform
-	mu       sync.Mutex
-	delivered bool
-}
-
-func (d *deliveryTrackingPlatform) Reply(ctx context.Context, replyCtx any, content string) error {
-	err := d.Platform.Reply(ctx, replyCtx, content)
-	if err == nil {
-		d.mu.Lock()
-		d.delivered = true
-		d.mu.Unlock()
-	}
-	return err
-}
-
-func (d *deliveryTrackingPlatform) Send(ctx context.Context, sessionKey any, content string) error {
-	err := d.Platform.Send(ctx, sessionKey, content)
-	if err == nil {
-		d.mu.Lock()
-		d.delivered = true
-		d.mu.Unlock()
-	}
-	return err
-}
-
-func (d *deliveryTrackingPlatform) wasDelivered() bool {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	return d.delivered
-}
 
 func GenerateCronID() string {
 	b := make([]byte, 4)
