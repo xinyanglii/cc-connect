@@ -288,6 +288,7 @@ func main() {
 		engine.SetFilterExternalSessions(proj.FilterExternalSessions != nil && *proj.FilterExternalSessions)
 		engine.SetBaseWorkDir(workDir)
 		engine.SetProjectStateStore(projectState)
+		engine.SetDataDir(cfg.DataDir)
 
 		// Wire multi-workspace mode
 		if proj.Mode == "multi-workspace" {
