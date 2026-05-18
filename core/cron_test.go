@@ -113,6 +113,41 @@ func TestMutePlatform_DiscardMessages(t *testing.T) {
 	}
 }
 
+func TestDeliveryTrackingPlatform_TracksDelivery(t *testing.T) {
+	inner := &stubPlatformEngine{n: "test"}
+	dp := &deliveryTrackingPlatform{Platform: inner}
+
+	// Initially no delivery
+	if dp.wasDelivered() {
+		t.Error("should not be delivered initially")
+	}
+
+	// Reply triggers delivery tracking
+	if err := dp.Reply(context.Background(), "ctx", "hello"); err != nil {
+		t.Errorf("Reply should return nil, got %v", err)
+	}
+	if !dp.wasDelivered() {
+		t.Error("should be delivered after Reply")
+	}
+
+	// Reset and test Send
+	dp2 := &deliveryTrackingPlatform{Platform: inner}
+	if err := dp2.Send(context.Background(), "key", "world"); err != nil {
+		t.Errorf("Send should return nil, got %v", err)
+	}
+	if !dp2.wasDelivered() {
+		t.Error("should be delivered after Send")
+	}
+}
+
+func TestDeliveryTrackingPlatform_DelegatesName(t *testing.T) {
+	inner := &stubPlatformEngine{n: "myplatform"}
+	dp := &deliveryTrackingPlatform{Platform: inner}
+	if dp.Name() != "myplatform" {
+		t.Errorf("deliveryTrackingPlatform should delegate Name(), got %q", dp.Name())
+	}
+}
+
 func TestCronJob_MuteField(t *testing.T) {
 	job := &CronJob{ID: "m1", Mute: false}
 	if job.Mute {
