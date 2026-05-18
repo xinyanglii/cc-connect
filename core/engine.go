@@ -13073,7 +13073,14 @@ func (e *Engine) buildSenderPrompt(content, userID, userName, platform, sessionK
 
 func extractChannelID(sessionKey string) string {
 	// Format: "platform:channelID:userID" or "platform:channelID"
-	parts := strings.SplitN(sessionKey, ":", 3)
+	// Some platforms encode a short type tag as an extra segment, e.g.
+	// "platform:t:channelID:userID" or "platform:t:channelID" (shared session)
+	// where t is a single-char tag. When parts[1] is a single char and at
+	// least one more segment follows, treat parts[2] as the real channel ID.
+	parts := strings.SplitN(sessionKey, ":", 4)
+	if len(parts) >= 3 && len(parts[1]) == 1 {
+		return parts[2]
+	}
 	if len(parts) >= 2 {
 		return parts[1]
 	}
@@ -13081,7 +13088,17 @@ func extractChannelID(sessionKey string) string {
 }
 
 func extractUserID(sessionKey string) string {
-	parts := strings.SplitN(sessionKey, ":", 3)
+	// Format: "platform:channelID:userID" or "platform:type:channelID:userID"
+	// When parts[1] is a single-char type tag, the user ID is in parts[3]
+	// (4-segment form). The 3-segment form with a type tag (shared session,
+	// e.g. "dingtalk:g:cid") has no per-user ID, so return "".
+	parts := strings.SplitN(sessionKey, ":", 5)
+	if len(parts) >= 3 && len(parts[1]) == 1 {
+		if len(parts) >= 4 {
+			return parts[3]
+		}
+		return ""
+	}
 	if len(parts) >= 3 {
 		return parts[2]
 	}
