@@ -5615,6 +5615,11 @@ func appendReplyFooter(content, footer string) string {
 		return content
 	}
 	content = strings.TrimRight(content, "\n")
+	last30 := content
+	if len(last30) > 30 {
+		last30 = last30[len(last30)-30:]
+	}
+	slog.Debug("appendReplyFooter", "content_len", len(content), "footer", footer, "content_last30", last30)
 	if content == "" {
 		return "*" + footer + "*"
 	}
