@@ -5615,18 +5615,15 @@ func appendReplyFooter(content, footer string) string {
 		return content
 	}
 	content = strings.TrimRight(content, "\n")
-	// Strip any existing asterisks from footer to prevent Feishu card markdown
-	// from rendering *text* as italic when the platform uses markdown rendering.
-	cleanFooter := strings.ReplaceAll(footer, "*", "")
 	last30 := content
 	if len(last30) > 30 {
 		last30 = last30[len(last30)-30:]
 	}
-	slog.Debug("appendReplyFooter", "content_len", len(content), "footer", footer, "clean_footer", cleanFooter, "content_last30", last30)
+	slog.Debug("appendReplyFooter", "content_len", len(content), "footer", footer, "content_last30", last30)
 	if content == "" {
-		return cleanFooter
+		return "*" + footer + "*"
 	}
-	return content + "\n\n" + cleanFooter
+	return content + "\n\n*" + footer + "*"
 }
 
 func (e *Engine) cmdShow(p Platform, msg *Message, args []string) {
