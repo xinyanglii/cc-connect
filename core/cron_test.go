@@ -623,6 +623,7 @@ func TestValidateCronJob_ModelRequiresNewPerRun(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			j := &CronJob{
+				SessionKey:  "test:ch:user",
 				SessionMode: tc.sessionMode,
 				Model:       tc.model,
 			}
@@ -637,6 +638,7 @@ func TestValidateCronJob_ModelRequiresNewPerRun(t *testing.T) {
 func TestValidateCronJob_ModelWithOtherErrors(t *testing.T) {
 	// Model + invalid session_mode: session_mode error should win (returned first).
 	j := &CronJob{
+		SessionKey:  "test:ch:user",
 		SessionMode: "bogus",
 		Model:       "sonnet",
 	}
